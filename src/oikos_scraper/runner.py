@@ -8,8 +8,10 @@ import structlog
 from oikos_scraper.config import AppConfig, SourceDefinition
 from oikos_scraper.db.repository import complete_scrape_run, create_scrape_run, ensure_sources, upsert_listings
 from oikos_scraper.db.session import create_session_factory
+from oikos_scraper.settings import get_setting
 from oikos_scraper.strategies.browser import BrowserStrategy
 from oikos_scraper.strategies.embedded_data import EmbeddedDataStrategy
+from oikos_scraper.strategies.selenium_grid import SeleniumGridStrategy
 from oikos_scraper.strategies.static_html import StaticHTMLStrategy
 from oikos_scraper.types import StrategyResult
 
@@ -31,20 +33,21 @@ class ScrapeRunner:
         self.config = config
         self.database_url = database_url
         self.session_factory = None
+        self.selenium_remote_url = get_setting("OIKOS_SELENIUM_REMOTE_URL")
         self.strategies = {
             "static_html": StaticHTMLStrategy(),
             "embedded_data": EmbeddedDataStrategy(),
             "browser": BrowserStrategy(),
         }
+        if self.selenium_remote_url:
+            self.strategies["selenium"] = SeleniumGridStrategy(self.selenium_remote_url)
 
     def _strategy_sequence(self, preferred_strategy: str) -> list[str]:
-        ordered = [preferred_strategy]
-        if preferred_strategy == "embedded_data":
-            ordered.extend(["browser", "static_html"])
-        elif preferred_strategy == "static_html":
-            ordered.extend(["browser", "embedded_data"])
-        else:
-            ordered.extend(["embedded_data", "static_html"])
+        httpx_primary = preferred_strategy if preferred_strategy in {"embedded_data", "static_html"} else "embedded_data"
+        httpx_secondary = "static_html" if httpx_primary == "embedded_data" else "embedded_data"
+        ordered = [httpx_primary, httpx_secondary, "browser"]
+        if "selenium" in self.strategies:
+            ordered.append("selenium")
         return list(dict.fromkeys(ordered))
 
     def _session_factory(self):

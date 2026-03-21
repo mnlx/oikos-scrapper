@@ -18,6 +18,7 @@ dependencies = [
   "pydantic>=2.10.6",
   "pyyaml>=6.0.2",
   "selectolax>=0.3.28",
+  "selenium>=4.33.0",
   "sqlalchemy>=2.0.39",
   "structlog>=25.2.0",
   "tenacity>=9.0.0",
