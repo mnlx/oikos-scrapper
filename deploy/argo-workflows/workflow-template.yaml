@@ -15,7 +15,7 @@ spec:
   templates:
     - name: run-scrape
       container:
-        image: ghcr.io/andreduarte/oikos-scrapper:main
+        image: ghcr.io/mnlx/oikos-scrapper:main
         imagePullPolicy: Always
         command:
           - oikos
