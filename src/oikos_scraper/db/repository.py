@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -9,6 +11,20 @@ from sqlalchemy.orm import Session
 from oikos_scraper.config import SourceDefinition
 from oikos_scraper.db.models import Listing, ScrapeRun, Source
 from oikos_scraper.types import ListingDraft
+
+
+def sanitize_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): sanitize_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_json_value(item) for item in value]
+    if isinstance(value, Decimal):
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def ensure_sources(session: Session, sources: list[SourceDefinition]) -> dict[str, Source]:
@@ -114,7 +130,7 @@ def upsert_listings(session: Session, source: Source, listings: list[ListingDraf
             "last_seen_at": now,
             "last_scraped_at": now,
             "is_active": True,
-            "raw_payload": listing.raw_payload,
+            "raw_payload": sanitize_json_value(listing.raw_payload),
         }
         statement = insert(Listing).values(**payload)
         update_columns = payload | {"first_seen_at": Listing.first_seen_at}
