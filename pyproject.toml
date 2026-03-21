@@ -12,6 +12,7 @@ dependencies = [
   "alembic>=1.15.2",
   "beautifulsoup4>=4.13.3",
   "httpx>=0.28.1",
+  "minio>=7.2.15",
   "playwright>=1.51.0",
   "python-dotenv>=1.0.1",
   "psycopg[binary]>=3.2.6",

@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 
 from oikos_scraper.config import SourceDefinition
 from oikos_scraper.db.models import Listing, ScrapeRun, Source
+from oikos_scraper.raw_html_store import build_raw_html_store
 from oikos_scraper.types import ListingDraft
+
+
+RAW_HTML_STORE = None
 
 
 def sanitize_json_value(value: Any) -> Any:
@@ -25,6 +29,35 @@ def sanitize_json_value(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
+
+
+def get_raw_html_store():
+    global RAW_HTML_STORE  # noqa: PLW0603
+    if RAW_HTML_STORE is None:
+        RAW_HTML_STORE = build_raw_html_store()
+    return RAW_HTML_STORE
+
+
+def persist_raw_html_payload(listing: ListingDraft) -> dict[str, Any]:
+    payload = dict(listing.raw_payload)
+    raw_html = payload.pop("raw_html", None)
+    if not raw_html:
+        return payload
+
+    store = get_raw_html_store()
+    if store is None:
+        payload["raw_html"] = raw_html
+        return payload
+
+    uploaded = store.upload_listing_html(listing, raw_html)
+    payload["raw_html_object"] = {
+        "bucket": uploaded.bucket,
+        "key": uploaded.key,
+        "endpoint": uploaded.endpoint,
+        "secure": uploaded.secure,
+        "size": uploaded.size,
+    }
+    return payload
 
 
 def ensure_sources(session: Session, sources: list[SourceDefinition]) -> dict[str, Source]:
@@ -130,7 +163,7 @@ def upsert_listings(session: Session, source: Source, listings: list[ListingDraf
             "last_seen_at": now,
             "last_scraped_at": now,
             "is_active": True,
-            "raw_payload": sanitize_json_value(listing.raw_payload),
+            "raw_payload": sanitize_json_value(persist_raw_html_payload(listing)),
         }
         statement = insert(Listing).values(**payload)
         update_columns = payload | {"first_seen_at": Listing.first_seen_at}
