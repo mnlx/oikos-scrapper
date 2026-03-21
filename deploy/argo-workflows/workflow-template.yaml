@@ -4,6 +4,7 @@ metadata:
   name: oikos-scrape
 spec:
   entrypoint: run-scrape
+  serviceAccountName: oikos-workflow-runner
   arguments:
     parameters:
       - name: run-mode
