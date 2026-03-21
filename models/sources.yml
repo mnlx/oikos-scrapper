@@ -4,13 +4,15 @@ sources:
   - name: app
     schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'public') }}"
     tables:
-      - name: bronze_listings
-      - name: listing_artifacts
-      - name: listing_ingestions
+      - name: raw_listings
+      - name: raw_listing_artifacts
+      - name: raw_listing_ingestions
+      - name: neighborhood_files
+      - name: neighborhood_signals
       - name: sources
 
 models:
-  - name: stg_bronze_listings
+  - name: raw_listings
     columns:
       - name: ingestion_id
         tests: [not_null, unique]
@@ -29,7 +31,16 @@ models:
               arguments:
                 values: ["house", "apartment"]
 
-  - name: api_listing_details
+  - name: raw_listing_ingestions
+    columns:
+      - name: ingestion_id
+        tests: [not_null, unique]
+      - name: page_url
+        tests: [not_null]
+      - name: depth
+        tests: [not_null]
+
+  - name: mart_listing_details
     columns:
       - name: offering_hash
         tests: [not_null, unique]
@@ -38,9 +49,21 @@ models:
       - name: source_code
         tests: [not_null]
 
-  - name: api_listing_media
+  - name: mart_listing_media
     columns:
       - name: offering_hash
         tests: [not_null]
       - name: media_uri
+        tests: [not_null]
+
+  - name: raw_neighborhood_files
+    columns:
+      - name: source_url
+        tests: [not_null]
+      - name: source_code
+        tests: [not_null]
+
+  - name: mart_neighborhood_files
+    columns:
+      - name: source_url
         tests: [not_null]

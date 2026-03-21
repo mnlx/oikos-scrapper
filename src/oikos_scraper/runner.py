@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -26,7 +28,7 @@ from oikos_scraper.db.repository import (
     upsert_listings,
 )
 from oikos_scraper.db.session import create_session_factory
-from oikos_scraper.heuristics import extract_image_urls
+from oikos_scraper.heuristics import extract_follow_links, extract_image_urls
 from oikos_scraper.normalizer import normalize_listing
 from oikos_scraper.object_store import BronzePathSpec, build_bronze_object_store, offering_hash
 from oikos_scraper.settings import get_setting
@@ -34,7 +36,7 @@ from oikos_scraper.strategies.browser import BrowserStrategy
 from oikos_scraper.strategies.embedded_data import EmbeddedDataStrategy
 from oikos_scraper.strategies.selenium_grid import SeleniumGridStrategy
 from oikos_scraper.strategies.static_html import StaticHTMLStrategy, enrich_listing_from_detail_html, extract_listing_from_detail
-from oikos_scraper.types import ListingArtifactBundle, ListingDraft, ParsedListingRecord, StoredObject, StrategyResult
+from oikos_scraper.types import CrawledPage, ListingArtifactBundle, ListingDraft, ParsedListingRecord, StoredObject, StrategyResult
 
 LOGGER = structlog.get_logger(__name__)
 
@@ -74,6 +76,9 @@ class ScrapeRunner:
         self.selenium_remote_url = get_setting("OIKOS_SELENIUM_REMOTE_URL")
         self.object_store = build_bronze_object_store()
         self.max_images_per_listing = int(get_setting("OIKOS_MAX_IMAGES_PER_LISTING", "10") or "10")
+        self.max_crawl_depth = int(get_setting("OIKOS_MAX_CRAWL_DEPTH", "5") or "5")
+        self.max_links_per_page = int(get_setting("OIKOS_MAX_LINKS_PER_PAGE", "25") or "25")
+        self.max_pages_per_listing = int(get_setting("OIKOS_MAX_PAGES_PER_LISTING", "100") or "100")
         self.enable_screenshots = (get_setting("OIKOS_ENABLE_SCREENSHOTS", "true") or "true").lower() in {
             "1",
             "true",
@@ -205,13 +210,57 @@ class ScrapeRunner:
                 error_count=1,
             )
 
-    def _fetch_listing_html(self, client: httpx.Client, listing: ListingDraft) -> str:
-        raw_html = listing.raw_payload.get("raw_html")
-        if isinstance(raw_html, str) and raw_html.strip():
+    def _playwright_page_html(self, url: str) -> str | None:
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page(viewport={"width": 1440, "height": 1200})
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=5000)
+                    except PlaywrightTimeoutError:
+                        pass
+                    return page.content()
+                finally:
+                    browser.close()
+        except Exception:
+            return None
+
+    def _selenium_page_html(self, url: str) -> str | None:
+        if not self.selenium_remote_url:
+            return None
+        options = Options()
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--no-sandbox")
+        driver = webdriver.Remote(command_executor=self.selenium_remote_url, options=options)
+        try:
+            driver.set_window_size(1440, 1400)
+            driver.get(url)
+            return driver.page_source
+        except Exception:
+            return None
+        finally:
+            driver.quit()
+
+    def _fetch_page_html(self, client: httpx.Client, url: str, *, raw_html: str | None = None) -> str:
+        if raw_html and raw_html.strip():
             return raw_html
-        response = client.get(listing.canonical_url)
-        response.raise_for_status()
-        return response.text
+        last_error: Exception | None = None
+        try:
+            response = client.get(url)
+            response.raise_for_status()
+            return response.text
+        except Exception as exc:
+            last_error = exc
+        html = self._playwright_page_html(url)
+        if html:
+            return html
+        html = self._selenium_page_html(url)
+        if html:
+            return html
+        raise RuntimeError(f"unable to fetch page html for {url}: {last_error}")
 
     def _playwright_screenshot(self, url: str) -> bytes | None:
         if not self.enable_screenshots:
@@ -262,21 +311,74 @@ class ScrapeRunner:
             index=index,
         ).object_key()
 
+    def _page_artifact_hash(self, listing: ListingDraft, page_url: str, depth: int) -> str:
+        base_hash = offering_hash(listing.source_code, listing.external_id)
+        if depth == 0 and page_url == listing.canonical_url:
+            return base_hash
+        page_hash = offering_hash(base_hash, page_url)[:12]
+        return f"{base_hash}-d{depth:02d}-{page_hash}"
+
+    def _allowed_hosts(self, source: SourceDefinition, listing: ListingDraft) -> set[str]:
+        hosts = {
+            urlparse(source.base_url).netloc.lower(),
+            urlparse(listing.canonical_url).netloc.lower(),
+        }
+        return {host for host in hosts if host}
+
+    def _crawl_listing_pages(
+        self,
+        *,
+        client: httpx.Client,
+        source: SourceDefinition,
+        listing: ListingDraft,
+    ) -> list[CrawledPage]:
+        allowed_hosts = self._allowed_hosts(source, listing)
+        queue: deque[tuple[str, int, str | None, str | None]] = deque(
+            [(listing.canonical_url, 0, None, listing.raw_payload.get("raw_html"))]
+        )
+        seen = {listing.canonical_url}
+        pages: list[CrawledPage] = []
+
+        while queue and len(pages) < self.max_pages_per_listing:
+            page_url, depth, parent_page_url, raw_html = queue.popleft()
+            html = self._fetch_page_html(client, page_url, raw_html=raw_html)
+            image_urls = extract_image_urls(html, page_url)
+            link_urls = extract_follow_links(html, page_url, allowed_hosts=allowed_hosts)
+            link_urls = link_urls[: self.max_links_per_page]
+            pages.append(
+                CrawledPage(
+                    page_url=page_url,
+                    depth=depth,
+                    parent_page_url=parent_page_url,
+                    html=html,
+                    image_urls=image_urls,
+                    link_urls=link_urls,
+                )
+            )
+            if depth >= self.max_crawl_depth:
+                continue
+            for link_url in link_urls:
+                if link_url in seen:
+                    continue
+                seen.add(link_url)
+                queue.append((link_url, depth + 1, page_url, None))
+
+        return pages
+
     def _store_bundle(
         self,
         *,
         client: httpx.Client,
         source: SourceDefinition,
         listing: ListingDraft,
+        page: CrawledPage,
         strategy_name: str,
-        html: str,
-        image_urls: list[str],
     ) -> ListingArtifactBundle:
         if self.object_store is None:
             raise RuntimeError("Bronze object store is not configured")
-        base_hash = offering_hash(source.code, listing.external_id)
+        base_hash = self._page_artifact_hash(listing, page.page_url, page.depth)
         html_object = self.object_store.put_text(
-            payload=html,
+            payload=page.html,
             key=self._artifact_key(category="html", base_hash=base_hash, extension=".html"),
             content_type="text/html; charset=utf-8",
         )
@@ -287,7 +389,11 @@ class ScrapeRunner:
                 "strategy": strategy_name,
                 "external_id": listing.external_id,
                 "canonical_url": listing.canonical_url,
+                "page_url": page.page_url,
+                "parent_page_url": page.parent_page_url,
+                "depth": page.depth,
                 "seed_urls": source.urls,
+                "discovered_links": page.link_urls,
                 "raw_payload": listing.raw_payload,
             },
             ensure_ascii=True,
@@ -299,7 +405,7 @@ class ScrapeRunner:
             key=self._artifact_key(category="json", base_hash=base_hash, extension=".json"),
             content_type="application/json",
         )
-        screenshot_bytes = self._capture_screenshot(listing.canonical_url)
+        screenshot_bytes = self._capture_screenshot(page.page_url)
         screenshot_object: StoredObject | None = None
         if screenshot_bytes is not None:
             screenshot_object = self.object_store.put_bytes(
@@ -308,7 +414,7 @@ class ScrapeRunner:
                 content_type="image/png",
             )
         image_objects: list[StoredObject] = []
-        for index, image_url in enumerate(image_urls[: self.max_images_per_listing], start=1):
+        for index, image_url in enumerate(page.image_urls[: self.max_images_per_listing], start=1):
             try:
                 head = client.get(image_url)
                 head.raise_for_status()
@@ -359,37 +465,51 @@ class ScrapeRunner:
         try:
             strategy_name, listings, _ = self._discover_with_fallbacks(source)
             artifacts_created = 0
+            ingestions_upserted = 0
             with self._http_client() as client:
                 for listing in listings:
-                    html = self._fetch_listing_html(client, listing)
-                    image_urls = extract_image_urls(html, listing.canonical_url)
-                    bundle = self._store_bundle(
-                        client=client,
-                        source=source,
-                        listing=listing,
-                        strategy_name=strategy_name,
-                        html=html,
-                        image_urls=image_urls,
-                    )
-                    with self._session_factory()() as session:
-                        ingestion = upsert_listing_ingestion(
-                            session,
-                            scrape_run=run,
-                            source=source_record,
+                    pages = self._crawl_listing_pages(client=client, source=source, listing=listing)
+                    seed_url = str(listing.raw_payload.get("seed_url") or source.urls[0])
+                    for page in pages:
+                        bundle = self._store_bundle(
+                            client=client,
+                            source=source,
                             listing=listing,
-                            seed_url=str(listing.raw_payload.get("seed_url") or source.urls[0]),
-                            strategy=strategy_name,
-                            image_urls=image_urls,
-                            ingestion_payload={
-                                **listing.raw_payload,
-                                "title": listing.title,
-                                "canonical_url": listing.canonical_url,
-                            },
+                            page=page,
+                            strategy_name=strategy_name,
                         )
-                        replace_listing_artifacts(session, ingestion=ingestion, bundle=bundle, image_source_urls=image_urls)
-                    artifacts_created += len(bundle.images) + sum(
-                        1 for item in (bundle.html, bundle.screenshot, bundle.metadata) if item is not None
-                    )
+                        with self._session_factory()() as session:
+                            ingestion = upsert_listing_ingestion(
+                                session,
+                                scrape_run=run,
+                                source=source_record,
+                                listing=listing,
+                                page_url=page.page_url,
+                                seed_url=seed_url,
+                                parent_page_url=page.parent_page_url,
+                                depth=page.depth,
+                                strategy=strategy_name,
+                                image_urls=page.image_urls,
+                                ingestion_payload={
+                                    **listing.raw_payload,
+                                    "title": listing.title,
+                                    "canonical_url": listing.canonical_url,
+                                    "page_url": page.page_url,
+                                    "parent_page_url": page.parent_page_url,
+                                    "depth": page.depth,
+                                    "discovered_links": page.link_urls,
+                                },
+                            )
+                            replace_listing_artifacts(
+                                session,
+                                ingestion=ingestion,
+                                bundle=bundle,
+                                image_source_urls=page.image_urls,
+                            )
+                        ingestions_upserted += 1
+                        artifacts_created += len(bundle.images) + sum(
+                            1 for item in (bundle.html, bundle.screenshot, bundle.metadata) if item is not None
+                        )
 
             with self._session_factory()() as session:
                 complete_scrape_run(
@@ -397,7 +517,7 @@ class ScrapeRunner:
                     run,
                     status="success",
                     items_seen=len(listings),
-                    items_inserted=len(listings),
+                    items_inserted=ingestions_upserted,
                     items_updated=0,
                     error_count=0,
                 )
@@ -405,7 +525,7 @@ class ScrapeRunner:
                 source_code=source.code,
                 strategy=strategy_name,
                 items_seen=len(listings),
-                ingestions_upserted=len(listings),
+                ingestions_upserted=ingestions_upserted,
                 artifacts_created=artifacts_created,
                 error_count=0,
             )

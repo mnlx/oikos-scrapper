@@ -1,3 +1,3 @@
 select *
-from {{ ref('api_listing_details') }}
+from {{ ref('mart_listing_details') }}
 where canonical_url !~ '^https?://'

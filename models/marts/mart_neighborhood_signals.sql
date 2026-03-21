@@ -1,0 +1,22 @@
+select
+  neighborhood_signal_id,
+  city,
+  state,
+  neighborhood,
+  geographic_scope,
+  signal_category,
+  signal_code,
+  signal_name,
+  source_name,
+  source_type,
+  publisher,
+  source_url,
+  reference_date,
+  period_start,
+  period_end,
+  value_numeric,
+  value_text,
+  unit,
+  priority,
+  collected_at
+from {{ ref('int_neighborhood_signals_latest') }}

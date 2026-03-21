@@ -9,7 +9,16 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from oikos_scraper.config import SourceDefinition
-from oikos_scraper.db.models import BronzeListing, Listing, ListingArtifact, ListingIngestion, ScrapeRun, Source
+from oikos_scraper.db.models import (
+    BronzeListing,
+    Listing,
+    ListingArtifact,
+    ListingIngestion,
+    NeighborhoodFile,
+    NeighborhoodSignal,
+    ScrapeRun,
+    Source,
+)
 from oikos_scraper.object_store import offering_hash
 from oikos_scraper.raw_html_store import build_raw_html_store
 from oikos_scraper.types import ListingArtifactBundle, ListingDraft, ParsedListingRecord, StoredObject
@@ -195,7 +204,10 @@ def upsert_listing_ingestion(
     scrape_run: ScrapeRun,
     source: Source,
     listing: ListingDraft,
+    page_url: str,
     seed_url: str,
+    parent_page_url: str | None,
+    depth: int,
     strategy: str,
     image_urls: list[str],
     ingestion_payload: dict[str, Any],
@@ -208,7 +220,10 @@ def upsert_listing_ingestion(
         external_id=listing.external_id,
         offering_hash=offering_hash(listing.source_code, listing.external_id),
         canonical_url=listing.canonical_url,
+        page_url=page_url,
         seed_url=seed_url,
+        parent_page_url=parent_page_url,
+        depth=depth,
         strategy=strategy,
         city=listing.city,
         broker_name=listing.broker_name,
@@ -217,12 +232,15 @@ def upsert_listing_ingestion(
         discovered_at=now,
         last_seen_at=now,
     ).on_conflict_do_update(
-        constraint="uq_listing_ingestions_source_external_id",
+        constraint="uq_raw_listing_ingestions_source_external_page",
         set_={
             "scrape_run_id": scrape_run.id,
             "offering_hash": offering_hash(listing.source_code, listing.external_id),
             "canonical_url": listing.canonical_url,
+            "page_url": page_url,
             "seed_url": seed_url,
+            "parent_page_url": parent_page_url,
+            "depth": depth,
             "strategy": strategy,
             "city": listing.city,
             "broker_name": listing.broker_name,
@@ -284,6 +302,7 @@ def list_ingestions(session: Session, source_codes: list[str] | None = None) -> 
     statement = select(ListingIngestion)
     if source_codes:
         statement = statement.where(ListingIngestion.source_code.in_(source_codes))
+    statement = statement.where(ListingIngestion.depth == 0)
     return session.execute(statement.order_by(ListingIngestion.last_seen_at.desc())).scalars().all()
 
 
@@ -291,6 +310,160 @@ def list_artifacts_for_ingestion(session: Session, ingestion_id: int) -> list[Li
     return session.execute(
         select(ListingArtifact).where(ListingArtifact.ingestion_id == ingestion_id).order_by(ListingArtifact.id.asc())
     ).scalars().all()
+
+
+def upsert_neighborhood_file(
+    session: Session,
+    *,
+    source: SourceDefinition,
+    source_url: str,
+    city: str | None,
+    neighborhood: str | None,
+    content_type: str | None,
+    html_uri: str | None,
+    json_uri: str | None,
+    screenshot_uri: str | None,
+    file_uri: str | None,
+    metadata_uri: str | None,
+    checksum_sha256: str | None,
+    size_bytes: int | None,
+    parse_status: str,
+    reference_date: datetime | None,
+    metadata_json: dict[str, Any],
+) -> NeighborhoodFile:
+    now = datetime.now(UTC)
+    statement = insert(NeighborhoodFile).values(
+        source_code=source.code,
+        source_name=source.name,
+        base_url=source.base_url,
+        source_url=source_url,
+        city=city,
+        state="SC",
+        neighborhood=neighborhood,
+        signal_category=source.signal_category,
+        geographic_scope=source.geographic_scope,
+        source_type=source.source_type,
+        publisher=source.publisher,
+        parser=source.parser,
+        content_type=content_type,
+        html_uri=html_uri,
+        json_uri=json_uri,
+        screenshot_uri=screenshot_uri,
+        file_uri=file_uri,
+        metadata_uri=metadata_uri,
+        checksum_sha256=checksum_sha256,
+        size_bytes=size_bytes,
+        parse_status=parse_status,
+        last_error=None,
+        reference_date=reference_date,
+        metadata_json=sanitize_json_value(metadata_json),
+        collected_at=now,
+        parsed_at=None,
+    ).on_conflict_do_update(
+        constraint="uq_neighborhood_files_source_url",
+        set_={
+            "source_name": source.name,
+            "base_url": source.base_url,
+            "city": city,
+            "state": "SC",
+            "neighborhood": neighborhood,
+            "signal_category": source.signal_category,
+            "geographic_scope": source.geographic_scope,
+            "source_type": source.source_type,
+            "publisher": source.publisher,
+            "parser": source.parser,
+            "content_type": content_type,
+            "html_uri": html_uri,
+            "json_uri": json_uri,
+            "screenshot_uri": screenshot_uri,
+            "file_uri": file_uri,
+            "metadata_uri": metadata_uri,
+            "checksum_sha256": checksum_sha256,
+            "size_bytes": size_bytes,
+            "parse_status": parse_status,
+            "last_error": None,
+            "reference_date": reference_date,
+            "metadata_json": sanitize_json_value(metadata_json),
+            "collected_at": now,
+        },
+    ).returning(NeighborhoodFile)
+    row = session.execute(statement).scalar_one()
+    session.commit()
+    return row
+
+
+def list_neighborhood_files(
+    session: Session,
+    source_codes: list[str] | None = None,
+    only_pending: bool = False,
+) -> list[NeighborhoodFile]:
+    statement = select(NeighborhoodFile)
+    if source_codes:
+        statement = statement.where(NeighborhoodFile.source_code.in_(source_codes))
+    if only_pending:
+        statement = statement.where(NeighborhoodFile.parse_status == "pending")
+    return session.execute(statement.order_by(NeighborhoodFile.collected_at.desc())).scalars().all()
+
+
+def update_neighborhood_file_parse_status(
+    session: Session,
+    row: NeighborhoodFile,
+    *,
+    parse_status: str,
+    last_error: str | None = None,
+) -> None:
+    row.parse_status = parse_status
+    row.last_error = last_error
+    row.parsed_at = datetime.now(UTC)
+    session.add(row)
+    session.commit()
+
+
+def insert_neighborhood_signal(
+    session: Session,
+    *,
+    city: str,
+    neighborhood: str | None,
+    geographic_scope: str,
+    signal_category: str,
+    signal_code: str,
+    signal_name: str,
+    source_name: str,
+    source_type: str,
+    publisher: str | None,
+    source_url: str,
+    reference_date: datetime | None,
+    value_numeric: Decimal | None,
+    value_text: str | None,
+    unit: str | None,
+    priority: int,
+    metadata_json: dict[str, Any],
+) -> NeighborhoodSignal:
+    row = NeighborhoodSignal(
+        city=city,
+        state="SC",
+        neighborhood=neighborhood,
+        geographic_scope=geographic_scope,
+        signal_category=signal_category,
+        signal_code=signal_code,
+        signal_name=signal_name,
+        source_name=source_name,
+        source_type=source_type,
+        publisher=publisher,
+        source_url=source_url,
+        reference_date=reference_date,
+        period_start=None,
+        period_end=None,
+        value_numeric=value_numeric,
+        value_text=value_text,
+        unit=unit,
+        priority=priority,
+        metadata_json=sanitize_json_value(metadata_json),
+        collected_at=datetime.now(UTC),
+    )
+    session.add(row)
+    session.commit()
+    return row
 
 
 def upsert_bronze_listing(
@@ -335,7 +508,7 @@ def upsert_bronze_listing(
         raw_payload=sanitize_json_value(record.raw_payload),
         parsed_at=parsed_at,
     ).on_conflict_do_update(
-        constraint="uq_bronze_listings_source_external_id",
+        constraint="uq_raw_listings_source_external_id",
         set_={
             "ingestion_id": ingestion.id,
             "offering_hash": record.offering_hash,

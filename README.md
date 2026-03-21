@@ -2,11 +2,22 @@
 
 Python scraper for housing listings in Greater Florianopolis. It collects sale and rental listings for houses and apartments, normalizes them, and stores them in Postgres.
 
-The pipeline is split into three phases:
+The repo is organized by bot:
 
-1. `ingest`: discovers listings with the current `httpx -> playwright -> selenium` fallback chain and stores raw HTML, screenshots, metadata, and downloaded listing images in MinIO under `s3://datalake/bronze/ingestion/listings/...`.
-2. `parse`: reads bronze artifacts back from MinIO, parses them into the `bronze_listings` table, and can optionally run the DBT silver layer.
+- `bots/realestate-listings`: listing discovery config and docs
+- `bots/neighborhood-signal`: public-signal config and docs
+
+The listings pipeline is split into three phases:
+
+1. `ingest`: discovers listings with the current `httpx -> playwright -> selenium` fallback chain, recursively follows same-host links up to depth `5`, and stores raw HTML, screenshots, metadata, and downloaded listing images in MinIO under `s3://datalake/bronze/ingestion/listings/...`.
+2. `parse`: reads bronze artifacts back from MinIO, parses them into the `raw_listings` table, and can optionally run the DBT `raw_`/`int_` layer.
 3. `publish`: runs the DBT gold/API models so the frontend or API can read pre-grouped tables.
+
+The neighborhood-signal bot follows the same raw-first pattern:
+
+1. `neighborhood-ingest`: downloads official HTML, JSON, screenshots, and other documents to `s3://datalake/bronze/ingestion/neighborhood_signal/...`.
+2. `neighborhood-parse`: attempts generic JSON scalar extraction into `neighborhood_signals`.
+3. `neighborhood-publish`: builds `raw_`, `int_`, and `mart_` dbt models for files and parsed signals.
 
 ## Commands
 
@@ -18,6 +29,9 @@ python -m oikos_scraper.cli parse --config config/sources.yaml --run-dbt
 python -m oikos_scraper.cli publish --select tag:gold
 python -m oikos_scraper.cli scrape-source --source olx --config config/sources.yaml
 python -m oikos_scraper.cli benchmark-source --source vivareal --config config/sources.yaml
+python -m oikos_scraper.cli neighborhood-ingest --config bots/neighborhood-signal/sources.yaml
+python -m oikos_scraper.cli neighborhood-parse --config bots/neighborhood-signal/sources.yaml
+python -m oikos_scraper.cli neighborhood-publish
 ```
 
 ## Local setup

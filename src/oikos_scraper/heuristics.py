@@ -170,6 +170,59 @@ def extract_image_urls(html: str, base_url: str) -> list[str]:
     return image_urls
 
 
+def extract_follow_links(
+    html: str,
+    base_url: str,
+    *,
+    allowed_hosts: set[str] | None = None,
+) -> list[str]:
+    tree = HTMLParser(html)
+    seen: set[str] = set()
+    links: list[str] = []
+    blocked_suffixes = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".ico",
+        ".css",
+        ".js",
+        ".json",
+        ".xml",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".eot",
+        ".mp4",
+        ".mp3",
+        ".zip",
+        ".rar",
+        ".7z",
+    }
+    normalized_hosts = {host.lower() for host in (allowed_hosts or set()) if host}
+    for node in tree.css("a[href]"):
+        href = (node.attributes.get("href") or "").strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        absolute = urljoin(base_url, href)
+        parsed = urlparse(absolute)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        if normalized_hosts and parsed.netloc.lower() not in normalized_hosts:
+            continue
+        suffix = parsed.path.lower()
+        if any(suffix.endswith(ext) for ext in blocked_suffixes):
+            continue
+        normalized = absolute.split("#", 1)[0]
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        links.append(normalized)
+    return links
+
+
 def extract_text_blocks(html: str) -> list[str]:
     soup = BeautifulSoup(html, "html.parser")
     texts = [compact_text(text) for text in soup.stripped_strings]

@@ -24,4 +24,4 @@ select
   published_at,
   image_uris ->> 0 as primary_image_uri,
   screenshot_uri
-from {{ ref('api_listing_details') }}
+from {{ ref('mart_listing_details') }}

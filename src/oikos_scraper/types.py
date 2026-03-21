@@ -65,6 +65,16 @@ class ListingArtifactBundle:
 
 
 @dataclass(slots=True)
+class CrawledPage:
+    page_url: str
+    depth: int
+    parent_page_url: str | None
+    html: str
+    image_urls: list[str] = field(default_factory=list)
+    link_urls: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class ParsedListingRecord:
     source_code: str
     external_id: str

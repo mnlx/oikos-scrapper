@@ -79,9 +79,9 @@ class Listing(Base):
 
 
 class ListingIngestion(Base):
-    __tablename__ = "listing_ingestions"
+    __tablename__ = "raw_listing_ingestions"
     __table_args__ = (
-        UniqueConstraint("source_id", "external_id", name="uq_listing_ingestions_source_external_id"),
+        UniqueConstraint("source_id", "external_id", "page_url", name="uq_raw_listing_ingestions_source_external_page"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -91,7 +91,10 @@ class ListingIngestion(Base):
     external_id: Mapped[str] = mapped_column(String(255))
     offering_hash: Mapped[str] = mapped_column(String(64))
     canonical_url: Mapped[str] = mapped_column(String(1000))
+    page_url: Mapped[str] = mapped_column(String(1000))
     seed_url: Mapped[str] = mapped_column(String(1000))
+    parent_page_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    depth: Mapped[int] = mapped_column(Integer, default=0)
     strategy: Mapped[str] = mapped_column(String(50))
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     broker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -102,13 +105,13 @@ class ListingIngestion(Base):
 
 
 class ListingArtifact(Base):
-    __tablename__ = "listing_artifacts"
+    __tablename__ = "raw_listing_artifacts"
     __table_args__ = (
-        UniqueConstraint("ingestion_id", "artifact_type", "object_key", name="uq_listing_artifacts_ingestion_object"),
+        UniqueConstraint("ingestion_id", "artifact_type", "object_key", name="uq_raw_listing_artifacts_ingestion_object"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    ingestion_id: Mapped[int] = mapped_column(ForeignKey("listing_ingestions.id"))
+    ingestion_id: Mapped[int] = mapped_column(ForeignKey("raw_listing_ingestions.id"))
     artifact_type: Mapped[str] = mapped_column(String(30))
     bucket: Mapped[str] = mapped_column(String(255))
     object_key: Mapped[str] = mapped_column(String(1000))
@@ -121,13 +124,13 @@ class ListingArtifact(Base):
 
 
 class BronzeListing(Base):
-    __tablename__ = "bronze_listings"
+    __tablename__ = "raw_listings"
     __table_args__ = (
-        UniqueConstraint("source_id", "external_id", name="uq_bronze_listings_source_external_id"),
+        UniqueConstraint("source_id", "external_id", name="uq_raw_listings_source_external_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    ingestion_id: Mapped[int] = mapped_column(ForeignKey("listing_ingestions.id"), unique=True)
+    ingestion_id: Mapped[int] = mapped_column(ForeignKey("raw_listing_ingestions.id"), unique=True)
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
     source_code: Mapped[str] = mapped_column(String(120))
     external_id: Mapped[str] = mapped_column(String(255))
@@ -189,3 +192,39 @@ class NeighborhoodSignal(Base):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class NeighborhoodFile(Base):
+    __tablename__ = "neighborhood_files"
+    __table_args__ = (
+        UniqueConstraint("source_code", "source_url", name="uq_neighborhood_files_source_url"),
+        Index("ix_neighborhood_files_city_neighborhood", "city", "neighborhood"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_code: Mapped[str] = mapped_column(String(120), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(1200), nullable=False)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    state: Mapped[str] = mapped_column(String(2), nullable=False, default="SC")
+    neighborhood: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    signal_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    geographic_scope: Mapped[str] = mapped_column(String(30), nullable=False, default="city")
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False, default="report")
+    publisher: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    parser: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    html_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    json_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    screenshot_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    file_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    metadata_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parse_status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -4,7 +4,7 @@ with expanded as (
     source_code,
     screenshot_uri,
     jsonb_array_elements_text(image_uris) as image_uri
-  from {{ ref('api_listing_details') }}
+  from {{ ref('mart_listing_details') }}
 )
 select
   offering_hash,
@@ -20,5 +20,5 @@ select
   source_code,
   'screenshot' as media_type,
   screenshot_uri as media_uri
-from {{ ref('api_listing_details') }}
+from {{ ref('mart_listing_details') }}
 where screenshot_uri is not null

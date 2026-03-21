@@ -9,7 +9,7 @@ with base as (
       partition by ingestion_id, artifact_type
       order by created_at asc, artifact_id asc
     ) as media_rank
-  from {{ ref('stg_listing_artifacts') }}
+  from {{ ref('raw_listing_artifacts') }}
 ),
 images as (
   select
@@ -49,7 +49,7 @@ select
   s.screenshot_uri,
   h.html_uri,
   m.metadata_uri
-from {{ ref('stg_bronze_listings') }} as b
+from {{ ref('raw_listings') }} as b
 left join images as i using (ingestion_id)
 left join screenshots as s using (ingestion_id)
 left join html as h using (ingestion_id)

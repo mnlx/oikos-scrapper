@@ -12,9 +12,9 @@ clean-targets: ["target", "dbt_packages"]
 
 models:
   oikos_scrapper:
-    staging:
+    raw:
       +materialized: view
-      +tags: ["silver"]
+      +tags: ["silver", "raw"]
     intermediate:
       +materialized: view
       +tags: ["silver"]

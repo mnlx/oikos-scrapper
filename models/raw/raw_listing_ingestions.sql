@@ -1,0 +1,20 @@
+select
+  id as ingestion_id,
+  scrape_run_id,
+  source_id,
+  source_code,
+  external_id,
+  offering_hash,
+  canonical_url,
+  page_url,
+  seed_url,
+  parent_page_url,
+  depth,
+  strategy,
+  city,
+  broker_name,
+  image_urls,
+  ingestion_payload,
+  discovered_at,
+  last_seen_at
+from {{ source('app', 'raw_listing_ingestions') }}

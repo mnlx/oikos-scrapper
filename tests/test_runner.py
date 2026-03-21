@@ -128,3 +128,44 @@ def test_runner_falls_back_to_selenium_after_browser(monkeypatch) -> None:
     assert summary.strategy == "selenium"
     assert summary.items_inserted == 1
     assert summary.error_count == 0
+
+
+def test_crawl_listing_pages_respects_depth_limit(monkeypatch) -> None:
+    runner = build_runner()
+    runner.max_crawl_depth = 2
+    runner.max_links_per_page = 10
+    runner.max_pages_per_listing = 20
+    source = runner.config.find_source("test")
+    draft = ListingDraft(
+        source_code="test",
+        external_id="test:depth",
+        canonical_url="https://example.com/root",
+        title="Recursive",
+        description=None,
+        transaction_type="sale",
+        property_type="house",
+        city="Florianopolis",
+        state="SC",
+        raw_payload={"raw_html": '<a href="/a">A</a>'},
+    )
+    html_map = {
+        "https://example.com/root": '<a href="/a">A</a>',
+        "https://example.com/a": '<a href="/b">B</a>',
+        "https://example.com/b": '<a href="/c">C</a>',
+        "https://example.com/c": '<a href="/d">D</a>',
+    }
+
+    monkeypatch.setattr(
+        runner,
+        "_fetch_page_html",
+        lambda client, url, raw_html=None: raw_html or html_map[url],
+    )
+
+    pages = runner._crawl_listing_pages(client=None, source=source, listing=draft)
+
+    assert [page.page_url for page in pages] == [
+        "https://example.com/root",
+        "https://example.com/a",
+        "https://example.com/b",
+    ]
+    assert [page.depth for page in pages] == [0, 1, 2]
