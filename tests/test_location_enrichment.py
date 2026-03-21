@@ -49,3 +49,4 @@ def test_enrich_listing_from_detail_html_populates_missing_location() -> None:
     assert listing.latitude == Decimal("-27.5953777")
     assert listing.longitude == Decimal("-48.5480499")
     assert listing.raw_payload["detail_enrichment"]["address"] == listing.address
+    assert listing.raw_payload["raw_html"] == HTML

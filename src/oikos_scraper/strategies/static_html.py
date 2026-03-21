@@ -45,6 +45,7 @@ def extract_listing_from_detail(source: SourceDefinition, html: str, detail_url:
             "raw_payload": {
                 "seed_url": seed_url,
                 "detail_url": detail_url,
+                "raw_html": html,
                 "excerpt": texts[:40],
             },
         },
@@ -73,6 +74,7 @@ def enrich_listing_from_detail_html(listing: ListingDraft, html: str) -> Listing
             "latitude": str(listing.latitude) if listing.latitude is not None else None,
             "longitude": str(listing.longitude) if listing.longitude is not None else None,
         },
+        "raw_html": html,
     }
     return listing
 
