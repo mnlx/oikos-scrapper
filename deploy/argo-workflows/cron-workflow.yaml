@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: oikos-scrape-daily
+spec:
+  schedules:
+    - "0 8 * * *"
+  timezone: "America/Sao_Paulo"
+  concurrencyPolicy: "Forbid"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  workflowSpec:
+    workflowTemplateRef:
+      name: oikos-scrape
+    arguments:
+      parameters:
+        - name: run-mode
+          value: scheduled

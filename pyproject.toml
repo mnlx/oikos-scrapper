@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "oikos-scrapper"
+version = "0.1.0"
+description = "Housing scraper for Greater Florianopolis listings."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.15.2",
+  "beautifulsoup4>=4.13.3",
+  "httpx>=0.28.1",
+  "playwright>=1.51.0",
+  "python-dotenv>=1.0.1",
+  "psycopg[binary]>=3.2.6",
+  "pydantic>=2.10.6",
+  "pyyaml>=6.0.2",
+  "selectolax>=0.3.28",
+  "sqlalchemy>=2.0.39",
+  "structlog>=25.2.0",
+  "tenacity>=9.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5",
+]
+
+[project.scripts]
+oikos = "oikos_scraper.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oikos_scraper"]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "src",
+]

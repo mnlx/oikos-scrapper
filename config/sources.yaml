@@ -1,0 +1,114 @@
+cities:
+  - Florianopolis
+  - Sao Jose
+  - Biguacu
+  - Palhoca
+property_types:
+  - house
+  - apartment
+transaction_types:
+  - sale
+  - rent
+sources:
+  - code: olx
+    name: OLX
+    base_url: https://www.olx.com.br
+    active: true
+    preferred_strategy: embedded_data
+    cities:
+      - Florianopolis
+      - Sao Jose
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://www.olx.com.br/imoveis/estado-sc/florianopolis-e-regiao/grande-florianopolis
+  - code: vivareal
+    name: Viva Real
+    base_url: https://www.vivareal.com.br
+    active: true
+    preferred_strategy: embedded_data
+    cities:
+      - Florianopolis
+      - Sao Jose
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://www.vivareal.com.br/venda/santa-catarina/florianopolis/
+      - https://www.vivareal.com.br/aluguel/santa-catarina/florianopolis/
+  - code: imovelweb
+    name: Imovelweb
+    base_url: https://www.imovelweb.com.br
+    active: true
+    preferred_strategy: embedded_data
+    cities:
+      - Florianopolis
+      - Sao Jose
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://www.imovelweb.com.br/imoveis-venda-florianopolis-sc.html
+      - https://www.imovelweb.com.br/imoveis-aluguel-florianopolis-sc.html
+  - code: junqueira_imobiliaria
+    name: Junqueira Imobiliaria
+    base_url: https://www.junqueiraimobiliaria.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Florianopolis
+    urls:
+      - https://www.junqueiraimobiliaria.com.br/imoveis
+  - code: donno_imoveis
+    name: Donno Imoveis
+    base_url: https://www.donno.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Florianopolis
+    urls:
+      - https://www.donno.com.br/imoveis
+  - code: pagani_imoveis
+    name: Pagani Imoveis
+    base_url: https://www.paganiimoveis.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Palhoca
+    urls:
+      - https://www.paganiimoveis.com.br/imoveis
+  - code: 4k_imoveis
+    name: 4K Imoveis
+    base_url: https://www.4kimoveis.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Sao Jose
+      - Palhoca
+    urls:
+      - https://www.4kimoveis.com.br/imoveis
+  - code: adriano_imoveis
+    name: Adriano Carpes Imoveis
+    base_url: https://www.adrianocarpes.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Biguacu
+    urls:
+      - https://www.adrianocarpes.com.br/imoveis
+  - code: talyta_imoveis
+    name: Talyta Imoveis
+    base_url: https://www.talytaimoveis.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Sao Jose
+    urls:
+      - https://www.talytaimoveis.com.br/imoveis
+  - code: janerson_maciel
+    name: Janerson Maciel Imoveis
+    base_url: https://www.janersonmaciel.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Palhoca
+    urls:
+      - https://www.janersonmaciel.com.br/imoveis

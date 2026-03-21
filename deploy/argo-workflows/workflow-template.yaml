@@ -1,0 +1,45 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: oikos-scrape
+spec:
+  entrypoint: run-scrape
+  arguments:
+    parameters:
+      - name: run-mode
+        value: manual
+  podGC:
+    strategy: OnWorkflowSuccess
+  ttlStrategy:
+    secondsAfterCompletion: 86400
+  templates:
+    - name: run-scrape
+      container:
+        image: ghcr.io/andreduarte/oikos-scrapper:main
+        imagePullPolicy: Always
+        command:
+          - oikos
+        args:
+          - scrape
+          - --run-mode
+          - "{{workflow.parameters.run-mode}}"
+          - --config
+          - /etc/oikos/sources.yaml
+        envFrom:
+          - secretRef:
+              name: oikos-scrapper-env
+        volumeMounts:
+          - name: source-config
+            mountPath: /etc/oikos
+            readOnly: true
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+  volumes:
+    - name: source-config
+      configMap:
+        name: oikos-scrapper-config

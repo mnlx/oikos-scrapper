@@ -1,0 +1,10 @@
+.pytest_cache/
+.venv/
+__pycache__/
+*.pyc
+.env
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+playwright-report/
