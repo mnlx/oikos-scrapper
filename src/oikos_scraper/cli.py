@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from dataclasses import asdict
 
 from alembic import command
 from alembic.config import Config
@@ -61,12 +62,12 @@ def main() -> None:
 
     if args.command == "scrape":
         summaries = runner.scrape_sources(args.source or None, trigger_type=args.run_mode)
-        print(json.dumps([summary.__dict__ for summary in summaries], indent=2))
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 
     if args.command == "scrape-source":
         summary = runner.scrape_sources([args.source], trigger_type=args.run_mode)
-        print(json.dumps([item.__dict__ for item in summary], indent=2))
+        print(json.dumps([asdict(item) for item in summary], indent=2))
         return
 
     if args.command == "benchmark-source":
