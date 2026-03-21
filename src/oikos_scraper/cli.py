@@ -8,7 +8,6 @@ from dataclasses import asdict
 from alembic import command
 from alembic.config import Config
 
-from oikos_scraper.bots.neighborhood_signal import NeighborhoodSignalRunner
 from oikos_scraper.config import load_config
 from oikos_scraper.logging import configure_logging
 from oikos_scraper.runner import ScrapeRunner
@@ -84,6 +83,13 @@ def run_migrations(config_path: str) -> None:
     if database_url:
         alembic_config.set_main_option("sqlalchemy.url", database_url)
     command.upgrade(alembic_config, "head")
+
+
+def build_neighborhood_runner(config_path: str):  # noqa: ANN201
+    from oikos_scraper.bots.neighborhood_signal import NeighborhoodSignalRunner
+
+    config = load_config(config_path)
+    return NeighborhoodSignalRunner(config)
 
 
 def main() -> None:
@@ -170,22 +176,19 @@ def main() -> None:
         return
 
     if args.command == "neighborhood-ingest":
-        config = load_config(args.config)
-        runner = NeighborhoodSignalRunner(config)
+        runner = build_neighborhood_runner(args.config)
         summaries = runner.ingest_sources(args.source or None, trigger_type=args.run_mode)
         print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 
     if args.command == "neighborhood-parse":
-        config = load_config(args.config)
-        runner = NeighborhoodSignalRunner(config)
+        runner = build_neighborhood_runner(args.config)
         summaries = runner.parse_sources(args.source or None)
         print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 
     if args.command == "neighborhood-publish":
-        config = load_config(neighborhood_config_default)
-        runner = NeighborhoodSignalRunner(config)
+        runner = build_neighborhood_runner(neighborhood_config_default)
         result = runner.run_dbt_build(select=args.select)
         print(
             json.dumps(
