@@ -1,17 +1,20 @@
-with expanded as (
+with assets as (
   select
-    offering_hash,
-    source_code,
-    screenshot_uri,
-    jsonb_array_elements_text(image_uris) as image_uri
-  from {{ ref('mart_listing_details') }}
+    l.offering_hash,
+    a.source_code,
+    a.asset_type as media_type,
+    a.asset_uri as media_uri
+  from {{ ref('raw_listing_assets') }} as a
+  join {{ ref('raw_listings') }} as l
+    on a.ingestion_id = l.ingestion_id
+  where a.is_scrapped
 )
 select
   offering_hash,
   source_code,
-  'image' as media_type,
-  image_uri as media_uri
-from expanded
+  media_type,
+  media_uri
+from assets
 
 union all
 

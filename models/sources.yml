@@ -5,6 +5,7 @@ sources:
     schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'public') }}"
     tables:
       - name: raw_listings
+      - name: raw_listing_assets
       - name: raw_listing_artifacts
       - name: raw_listing_ingestions
       - name: neighborhood_files
@@ -38,6 +39,17 @@ models:
       - name: page_url
         tests: [not_null]
       - name: depth
+        tests: [not_null]
+      - name: asset_links
+        tests: [not_null]
+
+  - name: raw_listing_assets
+    columns:
+      - name: raw_listing_asset_id
+        tests: [not_null, unique]
+      - name: asset_uri
+        tests: [not_null]
+      - name: is_scrapped
         tests: [not_null]
 
   - name: mart_listing_details

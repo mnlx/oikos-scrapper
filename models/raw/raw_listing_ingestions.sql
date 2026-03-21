@@ -14,6 +14,8 @@ select
   city,
   broker_name,
   image_urls,
+  asset_links,
+  screenshot_uri,
   ingestion_payload,
   discovered_at,
   last_seen_at

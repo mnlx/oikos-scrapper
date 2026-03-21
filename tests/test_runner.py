@@ -169,3 +169,41 @@ def test_crawl_listing_pages_respects_depth_limit(monkeypatch) -> None:
         "https://example.com/b",
     ]
     assert [page.depth for page in pages] == [0, 1, 2]
+
+
+def test_crawl_listing_pages_collects_asset_links(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    draft = ListingDraft(
+        source_code="test",
+        external_id="test:assets",
+        canonical_url="https://example.com/root",
+        title="Assets",
+        description=None,
+        transaction_type="sale",
+        property_type="house",
+        city="Florianopolis",
+        state="SC",
+        raw_payload={
+            "raw_html": (
+                '<a href="/folder/brochure.pdf">PDF</a>'
+                '<a href="/next">Next</a>'
+                '<img src="/images/home.jpg" />'
+            )
+        },
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "_fetch_page_html",
+        lambda client, url, raw_html=None: raw_html
+        or '<a href="/folder/floorplan.pdf">Floorplan</a><img src="/images/room.png" />',
+    )
+
+    pages = runner._crawl_listing_pages(client=None, source=source, listing=draft)
+
+    assert pages[0].asset_links == [
+        "https://example.com/images/home.jpg",
+        "https://example.com/folder/brochure.pdf",
+    ]
+    assert pages[0].link_urls == ["https://example.com/next"]

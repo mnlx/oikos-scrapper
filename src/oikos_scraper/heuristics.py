@@ -41,6 +41,48 @@ SCRIPT_PATTERNS = [
     re.compile(r"window\.__data"),
 ]
 
+ASSET_SUFFIXES = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".avif",
+    ".heic",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".csv",
+    ".ppt",
+    ".pptx",
+    ".zip",
+    ".rar",
+    ".7z",
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".webm",
+    ".mp3",
+}
+
+BLOCKED_NAVIGATION_SUFFIXES = ASSET_SUFFIXES | {
+    ".ico",
+    ".css",
+    ".js",
+    ".json",
+    ".xml",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+}
+
 CITY_MAP = {
     "florianopolis": "Florianopolis",
     "sao jose": "Sao Jose",
@@ -179,28 +221,6 @@ def extract_follow_links(
     tree = HTMLParser(html)
     seen: set[str] = set()
     links: list[str] = []
-    blocked_suffixes = {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".webp",
-        ".svg",
-        ".ico",
-        ".css",
-        ".js",
-        ".json",
-        ".xml",
-        ".woff",
-        ".woff2",
-        ".ttf",
-        ".eot",
-        ".mp4",
-        ".mp3",
-        ".zip",
-        ".rar",
-        ".7z",
-    }
     normalized_hosts = {host.lower() for host in (allowed_hosts or set()) if host}
     for node in tree.css("a[href]"):
         href = (node.attributes.get("href") or "").strip()
@@ -213,7 +233,7 @@ def extract_follow_links(
         if normalized_hosts and parsed.netloc.lower() not in normalized_hosts:
             continue
         suffix = parsed.path.lower()
-        if any(suffix.endswith(ext) for ext in blocked_suffixes):
+        if any(suffix.endswith(ext) for ext in BLOCKED_NAVIGATION_SUFFIXES):
             continue
         normalized = absolute.split("#", 1)[0]
         if normalized in seen:
@@ -221,6 +241,39 @@ def extract_follow_links(
         seen.add(normalized)
         links.append(normalized)
     return links
+
+
+def extract_asset_links(html: str, base_url: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    seen: set[str] = set()
+    assets: list[str] = []
+
+    def add_candidate(candidate: str | None) -> None:
+        if not candidate:
+            return
+        absolute = urljoin(base_url, candidate.strip())
+        parsed = urlparse(absolute)
+        if parsed.scheme not in {"http", "https"}:
+            return
+        normalized = absolute.split("#", 1)[0]
+        suffix = parsed.path.lower()
+        if not any(suffix.endswith(ext) for ext in ASSET_SUFFIXES):
+            return
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        assets.append(normalized)
+
+    for node in soup.select("a[href], link[href], img[src], img[data-src], img[data-lazy], source[srcset], iframe[src], embed[src]"):
+        add_candidate(node.get("href"))
+        add_candidate(node.get("src"))
+        add_candidate(node.get("data-src"))
+        add_candidate(node.get("data-lazy"))
+        srcset = node.get("srcset", "")
+        if srcset:
+            add_candidate(srcset.split(",")[0].strip().split(" ")[0])
+
+    return assets
 
 
 def extract_text_blocks(html: str) -> list[str]:

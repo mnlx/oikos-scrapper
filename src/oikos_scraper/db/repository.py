@@ -12,6 +12,7 @@ from oikos_scraper.config import SourceDefinition
 from oikos_scraper.db.models import (
     BronzeListing,
     Listing,
+    ListingAsset,
     ListingArtifact,
     ListingIngestion,
     NeighborhoodFile,
@@ -210,6 +211,8 @@ def upsert_listing_ingestion(
     depth: int,
     strategy: str,
     image_urls: list[str],
+    asset_links: list[str],
+    screenshot_uri: str | None,
     ingestion_payload: dict[str, Any],
 ) -> ListingIngestion:
     now = datetime.now(UTC)
@@ -228,6 +231,8 @@ def upsert_listing_ingestion(
         city=listing.city,
         broker_name=listing.broker_name,
         image_urls=image_urls,
+        asset_links=asset_links,
+        screenshot_uri=screenshot_uri,
         ingestion_payload=sanitize_json_value(ingestion_payload),
         discovered_at=now,
         last_seen_at=now,
@@ -245,6 +250,8 @@ def upsert_listing_ingestion(
             "city": listing.city,
             "broker_name": listing.broker_name,
             "image_urls": sanitize_json_value(image_urls),
+            "asset_links": sanitize_json_value(asset_links),
+            "screenshot_uri": screenshot_uri,
             "ingestion_payload": sanitize_json_value(ingestion_payload),
             "last_seen_at": now,
         },
@@ -260,7 +267,6 @@ def _artifact_rows(bundle: ListingArtifactBundle) -> list[tuple[str, StoredObjec
         ("screenshot", bundle.screenshot, None),
         ("json", bundle.metadata, None),
     ]
-    rows.extend(("image", item, None) for item in bundle.images)
     return [row for row in rows if row[1] is not None]
 
 
@@ -310,6 +316,61 @@ def list_artifacts_for_ingestion(session: Session, ingestion_id: int) -> list[Li
     return session.execute(
         select(ListingArtifact).where(ListingArtifact.ingestion_id == ingestion_id).order_by(ListingArtifact.id.asc())
     ).scalars().all()
+
+
+def upsert_listing_asset(
+    session: Session,
+    *,
+    source: Source,
+    ingestion: ListingIngestion,
+    asset_id: int,
+    asset_type: str,
+    asset_url: str,
+    asset_uri: str,
+    is_scrapped: bool,
+    content_type: str | None,
+    checksum_sha256: str | None,
+    size_bytes: int | None,
+) -> ListingAsset:
+    now = datetime.now(UTC)
+    row_id = f"{ingestion.source_code}:{ingestion.external_id}:{asset_id}"
+    statement = insert(ListingAsset).values(
+        id=row_id,
+        source_id=source.id,
+        ingestion_id=ingestion.id,
+        source_code=ingestion.source_code,
+        external_id=ingestion.external_id,
+        asset_id=asset_id,
+        asset_type=asset_type,
+        asset_url=asset_url,
+        asset_uri=asset_uri,
+        content_type=content_type,
+        checksum_sha256=checksum_sha256,
+        size_bytes=size_bytes,
+        is_scrapped=is_scrapped,
+        discovered_at=now,
+        scrapped_at=now if is_scrapped else None,
+    ).on_conflict_do_update(
+        constraint="uq_raw_listing_assets_source_external_url",
+        set_={
+            "id": row_id,
+            "source_id": source.id,
+            "ingestion_id": ingestion.id,
+            "source_code": ingestion.source_code,
+            "external_id": ingestion.external_id,
+            "asset_id": asset_id,
+            "asset_type": asset_type,
+            "asset_uri": asset_uri,
+            "content_type": content_type,
+            "checksum_sha256": checksum_sha256,
+            "size_bytes": size_bytes,
+            "is_scrapped": is_scrapped,
+            "scrapped_at": now if is_scrapped else ListingAsset.scrapped_at,
+        },
+    ).returning(ListingAsset)
+    row = session.execute(statement).scalar_one()
+    session.commit()
+    return row
 
 
 def upsert_neighborhood_file(
@@ -466,6 +527,11 @@ def insert_neighborhood_signal(
     return row
 
 
+def delete_neighborhood_signals_for_source_url(session: Session, source_url: str) -> None:
+    session.query(NeighborhoodSignal).filter(NeighborhoodSignal.source_url == source_url).delete()
+    session.commit()
+
+
 def upsert_bronze_listing(
     session: Session,
     *,
@@ -502,6 +568,7 @@ def upsert_bronze_listing(
         broker_name=record.broker_name,
         published_at=record.published_at,
         image_uris=sanitize_json_value(record.image_uris),
+        asset_links=sanitize_json_value(record.asset_links),
         screenshot_uri=record.screenshot_uri,
         html_uri=record.html_uri,
         metadata_uri=record.metadata_uri,
@@ -534,6 +601,7 @@ def upsert_bronze_listing(
             "broker_name": record.broker_name,
             "published_at": record.published_at,
             "image_uris": sanitize_json_value(record.image_uris),
+            "asset_links": sanitize_json_value(record.asset_links),
             "screenshot_uri": record.screenshot_uri,
             "html_uri": record.html_uri,
             "metadata_uri": record.metadata_uri,

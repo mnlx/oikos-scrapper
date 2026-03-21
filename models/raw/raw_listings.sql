@@ -28,6 +28,7 @@ select
   r.broker_name,
   r.published_at,
   r.image_uris,
+  r.asset_links,
   r.screenshot_uri,
   r.html_uri,
   r.metadata_uri,

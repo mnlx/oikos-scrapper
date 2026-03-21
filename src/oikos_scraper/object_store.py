@@ -30,6 +30,7 @@ class BronzePathSpec:
     run_at: datetime
     base_hash: str
     extension: str
+    dataset: str = "listings"
     index: int | None = None
 
     def object_key(self) -> str:
@@ -37,7 +38,7 @@ class BronzePathSpec:
         folder = PurePosixPath(
             self.layer,
             "ingestion",
-            "listings",
+            self.dataset,
             self.category,
             f"{stamp.year:04d}",
             f"{stamp.month:02d}",
@@ -103,6 +104,16 @@ class BronzeObjectStore:
 
     def put_bytes(self, *, payload: bytes, key: str, content_type: str) -> StoredObject:
         return self._put_bytes(payload=payload, key=key, content_type=content_type)
+
+    def uri_for_key(self, key: str) -> str:
+        return f"s3://{self.bucket}/{key}"
+
+    def object_exists(self, key: str) -> bool:
+        try:
+            self.client.stat_object(self.bucket, key)
+            return True
+        except Exception:
+            return False
 
     def get_text(self, key: str) -> str:
         response = self.client.get_object(self.bucket, key)

@@ -8,6 +8,7 @@ from dataclasses import asdict
 from alembic import command
 from alembic.config import Config
 
+from oikos_scraper.bots.neighborhood_signal import NeighborhoodSignalRunner
 from oikos_scraper.config import load_config
 from oikos_scraper.logging import configure_logging
 from oikos_scraper.runner import ScrapeRunner
@@ -17,7 +18,14 @@ from oikos_scraper.settings import get_setting, load_environment
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oikos")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    source_config_default = get_setting("OIKOS_SOURCE_CONFIG", "config/sources.yaml") or "config/sources.yaml"
+    source_config_default = (
+        get_setting("OIKOS_SOURCE_CONFIG", "bots/realestate-listings/sources.yaml")
+        or "bots/realestate-listings/sources.yaml"
+    )
+    neighborhood_config_default = (
+        get_setting("OIKOS_NEIGHBORHOOD_SOURCE_CONFIG", "bots/neighborhood-signal/sources.yaml")
+        or "bots/neighborhood-signal/sources.yaml"
+    )
 
     migrate = subparsers.add_parser("migrate")
     migrate.add_argument("--config", default="alembic.ini")
@@ -39,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     parse.add_argument("--source", action="append", default=[])
     parse.add_argument("--run-dbt", action="store_true")
 
+    enrich_assets = subparsers.add_parser("enriching-assets")
+    enrich_assets.add_argument("--config", default=source_config_default)
+    enrich_assets.add_argument("--source", action="append", default=[])
+
     publish = subparsers.add_parser("publish")
     publish.add_argument("--select", default="tag:gold")
 
@@ -50,6 +62,18 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark = subparsers.add_parser("benchmark-source")
     benchmark.add_argument("--config", default=source_config_default)
     benchmark.add_argument("--source", required=True)
+
+    neighborhood_ingest = subparsers.add_parser("neighborhood-ingest")
+    neighborhood_ingest.add_argument("--config", default=neighborhood_config_default)
+    neighborhood_ingest.add_argument("--run-mode", default="scheduled")
+    neighborhood_ingest.add_argument("--source", action="append", default=[])
+
+    neighborhood_parse = subparsers.add_parser("neighborhood-parse")
+    neighborhood_parse.add_argument("--config", default=neighborhood_config_default)
+    neighborhood_parse.add_argument("--source", action="append", default=[])
+
+    neighborhood_publish = subparsers.add_parser("neighborhood-publish")
+    neighborhood_publish.add_argument("--select", default="mart_neighborhood_signals mart_neighborhood_files")
 
     return parser
 
@@ -72,10 +96,9 @@ def main() -> None:
         run_migrations(args.config)
         return
 
-    config = load_config(args.config)
-    runner = ScrapeRunner(config)
-
     if args.command == "scrape":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
         summaries = runner.scrape_sources(
             args.source or None,
             trigger_type=args.run_mode,
@@ -85,6 +108,8 @@ def main() -> None:
         return
 
     if args.command == "ingest":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
         summaries = runner.ingest_sources(
             args.source or None,
             trigger_type=args.run_mode,
@@ -94,6 +119,8 @@ def main() -> None:
         return
 
     if args.command == "parse":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
         summaries = runner.parse_sources(args.source or None)
         response: dict[str, object] = {"summaries": [asdict(summary) for summary in summaries]}
         if args.run_dbt:
@@ -106,7 +133,16 @@ def main() -> None:
         print(json.dumps(response, indent=2))
         return
 
+    if args.command == "enriching-assets":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
+        summaries = runner.enrich_assets_sources(args.source or None)
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
     if args.command == "publish":
+        config = load_config(source_config_default)
+        runner = ScrapeRunner(config)
         result = runner.run_dbt_build(select=args.select)
         print(
             json.dumps(
@@ -121,12 +157,46 @@ def main() -> None:
         return
 
     if args.command == "scrape-source":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
         summary = runner.scrape_sources([args.source], trigger_type=args.run_mode)
         print(json.dumps([asdict(item) for item in summary], indent=2))
         return
 
     if args.command == "benchmark-source":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
         print(json.dumps(runner.benchmark_source(args.source), indent=2))
+        return
+
+    if args.command == "neighborhood-ingest":
+        config = load_config(args.config)
+        runner = NeighborhoodSignalRunner(config)
+        summaries = runner.ingest_sources(args.source or None, trigger_type=args.run_mode)
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
+    if args.command == "neighborhood-parse":
+        config = load_config(args.config)
+        runner = NeighborhoodSignalRunner(config)
+        summaries = runner.parse_sources(args.source or None)
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
+    if args.command == "neighborhood-publish":
+        config = load_config(neighborhood_config_default)
+        runner = NeighborhoodSignalRunner(config)
+        result = runner.run_dbt_build(select=args.select)
+        print(
+            json.dumps(
+                {
+                    "returncode": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                },
+                indent=2,
+            )
+        )
         return
 
 

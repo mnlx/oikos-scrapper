@@ -99,6 +99,8 @@ class ListingIngestion(Base):
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     broker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     image_urls: Mapped[list] = mapped_column(JSONB, default=list)
+    asset_links: Mapped[list] = mapped_column(JSONB, default=list)
+    screenshot_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     ingestion_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -157,11 +159,37 @@ class BronzeListing(Base):
     broker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     image_uris: Mapped[list] = mapped_column(JSONB, default=list)
+    asset_links: Mapped[list] = mapped_column(JSONB, default=list)
     screenshot_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     html_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     metadata_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     parsed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ListingAsset(Base):
+    __tablename__ = "raw_listing_assets"
+    __table_args__ = (
+        UniqueConstraint("source_id", "external_id", "asset_url", name="uq_raw_listing_assets_source_external_url"),
+        Index("ix_raw_listing_assets_source_external", "source_code", "external_id"),
+        Index("ix_raw_listing_assets_ingestion", "ingestion_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
+    ingestion_id: Mapped[int] = mapped_column(ForeignKey("raw_listing_ingestions.id"))
+    source_code: Mapped[str] = mapped_column(String(120))
+    external_id: Mapped[str] = mapped_column(String(255))
+    asset_id: Mapped[int] = mapped_column(Integer)
+    asset_type: Mapped[str] = mapped_column(String(50))
+    asset_url: Mapped[str] = mapped_column(String(1200))
+    asset_uri: Mapped[str] = mapped_column(String(1200))
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_scrapped: Mapped[bool] = mapped_column(Boolean, default=False)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    scrapped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class NeighborhoodSignal(Base):

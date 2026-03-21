@@ -72,6 +72,7 @@ class CrawledPage:
     html: str
     image_urls: list[str] = field(default_factory=list)
     link_urls: list[str] = field(default_factory=list)
+    asset_links: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -101,6 +102,7 @@ class ParsedListingRecord:
     broker_name: str | None
     published_at: str | None
     image_uris: list[str]
+    asset_links: list[str]
     screenshot_uri: str | None
     html_uri: str | None
     metadata_uri: str | None
