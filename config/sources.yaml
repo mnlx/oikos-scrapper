@@ -125,6 +125,39 @@ sources:
     urls:
       - https://www.achoimoveis.com.br/imovel/venda/casa
       - https://www.achoimoveis.com.br/imovel/venda/apartamento
+  - code: wkoerich_empreendimentos
+    name: WKoerich Empreendimentos
+    base_url: https://www.wkoerich.com.br
+    active: true
+    group: developer
+    preferred_strategy: static_html
+    cities:
+      - Florianopolis
+      - Sao Jose
+    urls:
+      - https://www.wkoerich.com.br/empreendimentos/
+  - code: construtora_mtf
+    name: Construtora MTF
+    base_url: https://www.construtoramtf.com.br
+    active: true
+    group: developer
+    preferred_strategy: static_html
+    cities:
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://www.construtoramtf.com.br/empreendimentos
+      - https://www.construtoramtf.com.br/cidade/3/biguacu
+  - code: amaral_construtora
+    name: Amaral Construtora
+    base_url: https://www.amaralconstrutora.com
+    active: true
+    group: developer
+    preferred_strategy: static_html
+    cities:
+      - Sao Jose
+    urls:
+      - https://www.amaralconstrutora.com/empreendimentos/
   - code: junqueira_imobiliaria
     name: Junqueira Imobiliaria
     base_url: https://www.junqueiraimobiliaria.com.br

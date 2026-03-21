@@ -68,11 +68,16 @@ class ScrapeRunner:
             timeout=30.0,
         )
 
-    def scrape_sources(self, source_codes: list[str] | None = None, trigger_type: str = "scheduled") -> list[SourceRunSummary]:
+    def scrape_sources(
+        self,
+        source_codes: list[str] | None = None,
+        trigger_type: str = "scheduled",
+        group: str | None = None,
+    ) -> list[SourceRunSummary]:
         selected = (
             [self.config.find_source(code) for code in source_codes]
             if source_codes
-            else self.config.active_sources()
+            else self.config.active_sources(group=group)
         )
         with self._session_factory()() as session:
             source_records = ensure_sources(session, selected)

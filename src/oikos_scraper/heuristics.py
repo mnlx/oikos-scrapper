@@ -15,7 +15,9 @@ PRICE_RE = re.compile(r"R\$\s*([\d\.\,]+)")
 NUMBER_RE = re.compile(r"(\d+)")
 AREA_RE = re.compile(r"(\d+(?:[\.,]\d+)?)\s*m")
 DECIMAL_RE = re.compile(r"-?\d+(?:\.\d+)?")
-DETAIL_PATH_RE = re.compile(r"(imovel|imoveis|apartamento|casa|apto|cobertura|sobrado)")
+DETAIL_PATH_RE = re.compile(
+    r"(imovel|imoveis|apartamento|casa|apto|cobertura|sobrado|empreendimento|empreendimentos|lancamento|lancamentos|unidade)"
+)
 ADDRESS_HINT_RE = re.compile(
     r"\b(rua|r\.|avenida|av\.|travessa|servid[aã]o|rodovia|estrada|alameda|pra[cç]a)\b",
     re.IGNORECASE,

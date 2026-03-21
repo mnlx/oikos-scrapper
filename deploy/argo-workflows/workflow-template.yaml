@@ -3,7 +3,7 @@ kind: WorkflowTemplate
 metadata:
   name: oikos-scrape
 spec:
-  entrypoint: run-scrape
+  entrypoint: run-all
   serviceAccountName: oikos-workflow-runner
   arguments:
     parameters:
@@ -14,7 +14,24 @@ spec:
   ttlStrategy:
     secondsAfterCompletion: 86400
   templates:
+    - name: run-all
+      steps:
+        - - name: scrape-agencies
+            template: run-scrape
+            arguments:
+              parameters:
+                - name: group
+                  value: agency
+        - - name: scrape-developers
+            template: run-scrape
+            arguments:
+              parameters:
+                - name: group
+                  value: developer
     - name: run-scrape
+      inputs:
+        parameters:
+          - name: group
       container:
         image: ghcr.io/mnlx/oikos-scrapper:main
         imagePullPolicy: Always
@@ -24,6 +41,8 @@ spec:
           - scrape
           - --run-mode
           - "{{workflow.parameters.run-mode}}"
+          - --group
+          - "{{inputs.parameters.group}}"
           - --config
           - /etc/oikos/sources.yaml
         envFrom:

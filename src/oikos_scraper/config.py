@@ -11,6 +11,7 @@ class SourceDefinition(BaseModel):
     name: str
     base_url: str
     active: bool = True
+    group: str = "agency"
     preferred_strategy: str = "embedded_data"
     cities: list[str] = Field(default_factory=list)
     urls: list[str] = Field(default_factory=list)
@@ -22,8 +23,12 @@ class AppConfig(BaseModel):
     transaction_types: list[str]
     sources: list[SourceDefinition]
 
-    def active_sources(self) -> list[SourceDefinition]:
-        return [source for source in self.sources if source.active]
+    def active_sources(self, group: str | None = None) -> list[SourceDefinition]:
+        return [
+            source
+            for source in self.sources
+            if source.active and (group is None or source.group == group)
+        ]
 
     def find_source(self, code: str) -> SourceDefinition:
         for source in self.sources:

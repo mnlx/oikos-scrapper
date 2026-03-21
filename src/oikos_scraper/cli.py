@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     scrape.add_argument("--config", default=source_config_default)
     scrape.add_argument("--run-mode", default="scheduled")
     scrape.add_argument("--source", action="append", default=[])
+    scrape.add_argument("--group", choices=["agency", "developer"], default=None)
 
     scrape_source = subparsers.add_parser("scrape-source")
     scrape_source.add_argument("--config", default=source_config_default)
@@ -61,7 +62,11 @@ def main() -> None:
     runner = ScrapeRunner(config)
 
     if args.command == "scrape":
-        summaries = runner.scrape_sources(args.source or None, trigger_type=args.run_mode)
+        summaries = runner.scrape_sources(
+            args.source or None,
+            trigger_type=args.run_mode,
+            group=args.group,
+        )
         print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 
