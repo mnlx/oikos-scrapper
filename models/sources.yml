@@ -1,0 +1,46 @@
+version: 2
+
+sources:
+  - name: app
+    schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'public') }}"
+    tables:
+      - name: bronze_listings
+      - name: listing_artifacts
+      - name: listing_ingestions
+      - name: sources
+
+models:
+  - name: stg_bronze_listings
+    columns:
+      - name: ingestion_id
+        tests: [not_null, unique]
+      - name: offering_hash
+        tests: [not_null]
+      - name: canonical_url
+        tests: [not_null]
+      - name: transaction_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["sale", "rent"]
+      - name: property_type
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["house", "apartment"]
+
+  - name: api_listing_details
+    columns:
+      - name: offering_hash
+        tests: [not_null, unique]
+      - name: canonical_url
+        tests: [not_null]
+      - name: source_code
+        tests: [not_null]
+
+  - name: api_listing_media
+    columns:
+      - name: offering_hash
+        tests: [not_null]
+      - name: media_uri
+        tests: [not_null]

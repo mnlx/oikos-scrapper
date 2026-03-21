@@ -9,9 +9,10 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from oikos_scraper.config import SourceDefinition
-from oikos_scraper.db.models import Listing, ScrapeRun, Source
+from oikos_scraper.db.models import BronzeListing, Listing, ListingArtifact, ListingIngestion, ScrapeRun, Source
+from oikos_scraper.object_store import offering_hash
 from oikos_scraper.raw_html_store import build_raw_html_store
-from oikos_scraper.types import ListingDraft
+from oikos_scraper.types import ListingArtifactBundle, ListingDraft, ParsedListingRecord, StoredObject
 
 
 RAW_HTML_STORE = None
@@ -84,13 +85,20 @@ def ensure_sources(session: Session, sources: list[SourceDefinition]) -> dict[st
     return existing
 
 
-def create_scrape_run(session: Session, source_code: str, trigger_type: str, strategy: str) -> ScrapeRun:
+def create_scrape_run(
+    session: Session,
+    source_code: str,
+    trigger_type: str,
+    strategy: str,
+    pipeline_stage: str = "scrape",
+) -> ScrapeRun:
     run = ScrapeRun(
         started_at=datetime.now(UTC),
         trigger_type=trigger_type,
         status="running",
         source_code=source_code,
         strategy=strategy,
+        pipeline_stage=pipeline_stage,
         items_seen=0,
         items_inserted=0,
         items_updated=0,
@@ -179,3 +187,187 @@ def upsert_listings(session: Session, source: Source, listings: list[ListingDraf
             updated += 1
     session.commit()
     return inserted, updated
+
+
+def upsert_listing_ingestion(
+    session: Session,
+    *,
+    scrape_run: ScrapeRun,
+    source: Source,
+    listing: ListingDraft,
+    seed_url: str,
+    strategy: str,
+    image_urls: list[str],
+    ingestion_payload: dict[str, Any],
+) -> ListingIngestion:
+    now = datetime.now(UTC)
+    statement = insert(ListingIngestion).values(
+        scrape_run_id=scrape_run.id,
+        source_id=source.id,
+        source_code=listing.source_code,
+        external_id=listing.external_id,
+        offering_hash=offering_hash(listing.source_code, listing.external_id),
+        canonical_url=listing.canonical_url,
+        seed_url=seed_url,
+        strategy=strategy,
+        city=listing.city,
+        broker_name=listing.broker_name,
+        image_urls=image_urls,
+        ingestion_payload=sanitize_json_value(ingestion_payload),
+        discovered_at=now,
+        last_seen_at=now,
+    ).on_conflict_do_update(
+        constraint="uq_listing_ingestions_source_external_id",
+        set_={
+            "scrape_run_id": scrape_run.id,
+            "offering_hash": offering_hash(listing.source_code, listing.external_id),
+            "canonical_url": listing.canonical_url,
+            "seed_url": seed_url,
+            "strategy": strategy,
+            "city": listing.city,
+            "broker_name": listing.broker_name,
+            "image_urls": sanitize_json_value(image_urls),
+            "ingestion_payload": sanitize_json_value(ingestion_payload),
+            "last_seen_at": now,
+        },
+    ).returning(ListingIngestion)
+    ingestion = session.execute(statement).scalar_one()
+    session.commit()
+    return ingestion
+
+
+def _artifact_rows(bundle: ListingArtifactBundle) -> list[tuple[str, StoredObject | None, str | None]]:
+    rows: list[tuple[str, StoredObject | None, str | None]] = [
+        ("html", bundle.html, None),
+        ("screenshot", bundle.screenshot, None),
+        ("json", bundle.metadata, None),
+    ]
+    rows.extend(("image", item, None) for item in bundle.images)
+    return [row for row in rows if row[1] is not None]
+
+
+def replace_listing_artifacts(
+    session: Session,
+    *,
+    ingestion: ListingIngestion,
+    bundle: ListingArtifactBundle,
+    image_source_urls: list[str] | None = None,
+) -> None:
+    session.query(ListingArtifact).filter(ListingArtifact.ingestion_id == ingestion.id).delete()
+    created_at = datetime.now(UTC)
+    image_urls = image_source_urls or []
+    image_index = 0
+    for artifact_type, stored, source_url in _artifact_rows(bundle):
+        if stored is None:
+            continue
+        if artifact_type == "image":
+            source_url = image_urls[image_index] if image_index < len(image_urls) else None
+            image_index += 1
+        session.add(
+            ListingArtifact(
+                ingestion_id=ingestion.id,
+                artifact_type=artifact_type,
+                bucket=stored.bucket,
+                object_key=stored.key,
+                object_uri=stored.uri,
+                content_type=stored.content_type,
+                checksum_sha256=stored.checksum_sha256,
+                size_bytes=stored.size,
+                source_url=source_url,
+                created_at=created_at,
+            )
+        )
+    session.commit()
+
+
+def list_ingestions(session: Session, source_codes: list[str] | None = None) -> list[ListingIngestion]:
+    statement = select(ListingIngestion)
+    if source_codes:
+        statement = statement.where(ListingIngestion.source_code.in_(source_codes))
+    return session.execute(statement.order_by(ListingIngestion.last_seen_at.desc())).scalars().all()
+
+
+def list_artifacts_for_ingestion(session: Session, ingestion_id: int) -> list[ListingArtifact]:
+    return session.execute(
+        select(ListingArtifact).where(ListingArtifact.ingestion_id == ingestion_id).order_by(ListingArtifact.id.asc())
+    ).scalars().all()
+
+
+def upsert_bronze_listing(
+    session: Session,
+    *,
+    source: Source,
+    ingestion: ListingIngestion,
+    record: ParsedListingRecord,
+) -> BronzeListing:
+    parsed_at = record.parsed_at or datetime.now(UTC)
+    statement = insert(BronzeListing).values(
+        ingestion_id=ingestion.id,
+        source_id=source.id,
+        source_code=record.source_code,
+        external_id=record.external_id,
+        offering_hash=record.offering_hash,
+        canonical_url=record.canonical_url,
+        title=record.title,
+        transaction_type=record.transaction_type,
+        property_type=record.property_type,
+        city=record.city,
+        state=record.state,
+        neighborhood=record.neighborhood,
+        address=record.address,
+        latitude=record.latitude,
+        longitude=record.longitude,
+        price_sale=record.price_sale,
+        price_rent=record.price_rent,
+        condo_fee=record.condo_fee,
+        iptu=record.iptu,
+        bedrooms=record.bedrooms,
+        bathrooms=record.bathrooms,
+        parking_spaces=record.parking_spaces,
+        area_m2=record.area_m2,
+        description=record.description,
+        broker_name=record.broker_name,
+        published_at=record.published_at,
+        image_uris=sanitize_json_value(record.image_uris),
+        screenshot_uri=record.screenshot_uri,
+        html_uri=record.html_uri,
+        metadata_uri=record.metadata_uri,
+        raw_payload=sanitize_json_value(record.raw_payload),
+        parsed_at=parsed_at,
+    ).on_conflict_do_update(
+        constraint="uq_bronze_listings_source_external_id",
+        set_={
+            "ingestion_id": ingestion.id,
+            "offering_hash": record.offering_hash,
+            "canonical_url": record.canonical_url,
+            "title": record.title,
+            "transaction_type": record.transaction_type,
+            "property_type": record.property_type,
+            "city": record.city,
+            "state": record.state,
+            "neighborhood": record.neighborhood,
+            "address": record.address,
+            "latitude": record.latitude,
+            "longitude": record.longitude,
+            "price_sale": record.price_sale,
+            "price_rent": record.price_rent,
+            "condo_fee": record.condo_fee,
+            "iptu": record.iptu,
+            "bedrooms": record.bedrooms,
+            "bathrooms": record.bathrooms,
+            "parking_spaces": record.parking_spaces,
+            "area_m2": record.area_m2,
+            "description": record.description,
+            "broker_name": record.broker_name,
+            "published_at": record.published_at,
+            "image_uris": sanitize_json_value(record.image_uris),
+            "screenshot_uri": record.screenshot_uri,
+            "html_uri": record.html_uri,
+            "metadata_uri": record.metadata_uri,
+            "raw_payload": sanitize_json_value(record.raw_payload),
+            "parsed_at": parsed_at,
+        },
+    ).returning(BronzeListing)
+    bronze = session.execute(statement).scalar_one()
+    session.commit()
+    return bronze

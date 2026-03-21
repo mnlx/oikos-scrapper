@@ -38,7 +38,11 @@ COPY pyproject.toml README.md /app/
 COPY alembic.ini /app/
 COPY alembic /app/alembic
 COPY config /app/config
+COPY dbt /app/dbt
+COPY dbt_project.yml /app/
+COPY models /app/models
 COPY src /app/src
+COPY tests /app/tests
 
 RUN pip install --upgrade pip && pip install .
 RUN playwright install chromium

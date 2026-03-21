@@ -9,6 +9,8 @@ spec:
     parameters:
       - name: run-mode
         value: manual
+      - name: publish-select
+        value: +tag:gold
   podGC:
     strategy: OnWorkflowSuccess
   ttlStrategy:
@@ -16,35 +18,87 @@ spec:
   templates:
     - name: run-all
       steps:
-        - - name: scrape-agencies
-            template: run-scrape
+        - - name: ingest-agencies
+            template: run-ingest
             arguments:
               parameters:
                 - name: group
                   value: agency
-        - - name: scrape-developers
-            template: run-scrape
+        - - name: ingest-developers
+            template: run-ingest
             arguments:
               parameters:
                 - name: group
                   value: developer
-    - name: run-scrape
+        - - name: parse-bronze
+            template: run-parse
+        - - name: publish-api
+            template: run-publish
+    - name: run-ingest
       inputs:
         parameters:
           - name: group
       container:
-        image: ghcr.io/mnlx/oikos-scrapper:main
+        image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion
         imagePullPolicy: Always
         command:
           - oikos
         args:
-          - scrape
+          - ingest
           - --run-mode
           - "{{workflow.parameters.run-mode}}"
           - --group
           - "{{inputs.parameters.group}}"
           - --config
           - /etc/oikos/sources.yaml
+        envFrom:
+          - secretRef:
+              name: oikos-scrapper-env
+        volumeMounts:
+          - name: source-config
+            mountPath: /etc/oikos
+            readOnly: true
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+    - name: run-parse
+      container:
+        image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion
+        imagePullPolicy: Always
+        command:
+          - oikos
+        args:
+          - parse
+          - --config
+          - /etc/oikos/sources.yaml
+        envFrom:
+          - secretRef:
+              name: oikos-scrapper-env
+        volumeMounts:
+          - name: source-config
+            mountPath: /etc/oikos
+            readOnly: true
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+    - name: run-publish
+      container:
+        image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion
+        imagePullPolicy: Always
+        command:
+          - oikos
+        args:
+          - publish
+          - --select
+          - "{{workflow.parameters.publish-select}}"
         envFrom:
           - secretRef:
               name: oikos-scrapper-env

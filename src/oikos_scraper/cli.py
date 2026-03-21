@@ -28,6 +28,20 @@ def build_parser() -> argparse.ArgumentParser:
     scrape.add_argument("--source", action="append", default=[])
     scrape.add_argument("--group", choices=["agency", "developer"], default=None)
 
+    ingest = subparsers.add_parser("ingest")
+    ingest.add_argument("--config", default=source_config_default)
+    ingest.add_argument("--run-mode", default="scheduled")
+    ingest.add_argument("--source", action="append", default=[])
+    ingest.add_argument("--group", choices=["agency", "developer"], default=None)
+
+    parse = subparsers.add_parser("parse")
+    parse.add_argument("--config", default=source_config_default)
+    parse.add_argument("--source", action="append", default=[])
+    parse.add_argument("--run-dbt", action="store_true")
+
+    publish = subparsers.add_parser("publish")
+    publish.add_argument("--select", default="tag:gold")
+
     scrape_source = subparsers.add_parser("scrape-source")
     scrape_source.add_argument("--config", default=source_config_default)
     scrape_source.add_argument("--source", required=True)
@@ -68,6 +82,42 @@ def main() -> None:
             group=args.group,
         )
         print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
+    if args.command == "ingest":
+        summaries = runner.ingest_sources(
+            args.source or None,
+            trigger_type=args.run_mode,
+            group=args.group,
+        )
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
+    if args.command == "parse":
+        summaries = runner.parse_sources(args.source or None)
+        response: dict[str, object] = {"summaries": [asdict(summary) for summary in summaries]}
+        if args.run_dbt:
+            dbt_result = runner.run_dbt_build(select="tag:silver")
+            response["dbt"] = {
+                "returncode": dbt_result.returncode,
+                "stdout": dbt_result.stdout,
+                "stderr": dbt_result.stderr,
+            }
+        print(json.dumps(response, indent=2))
+        return
+
+    if args.command == "publish":
+        result = runner.run_dbt_build(select=args.select)
+        print(
+            json.dumps(
+                {
+                    "returncode": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                },
+                indent=2,
+            )
+        )
         return
 
     if args.command == "scrape-source":

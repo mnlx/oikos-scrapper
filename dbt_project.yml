@@ -1,0 +1,23 @@
+name: oikos_scrapper
+version: 1.0.0
+config-version: 2
+
+profile: oikos_scrapper
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests/dbt"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  oikos_scrapper:
+    staging:
+      +materialized: view
+      +tags: ["silver"]
+    intermediate:
+      +materialized: view
+      +tags: ["silver"]
+    marts:
+      +materialized: table
+      +tags: ["gold"]

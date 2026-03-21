@@ -148,6 +148,28 @@ def extract_detail_links(html: str, base_url: str) -> list[str]:
     return links
 
 
+def extract_image_urls(html: str, base_url: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    seen: set[str] = set()
+    image_urls: list[str] = []
+    for node in soup.select("img[src], img[data-src], img[data-lazy], source[srcset]"):
+        candidate = (
+            node.get("src")
+            or node.get("data-src")
+            or node.get("data-lazy")
+            or node.get("srcset", "").split(",")[0].strip().split(" ")[0]
+        )
+        if not candidate:
+            continue
+        absolute = urljoin(base_url, candidate)
+        parsed = urlparse(absolute)
+        if parsed.scheme not in {"http", "https"} or absolute in seen:
+            continue
+        seen.add(absolute)
+        image_urls.append(absolute)
+    return image_urls
+
+
 def extract_text_blocks(html: str) -> list[str]:
     soup = BeautifulSoup(html, "html.parser")
     texts = [compact_text(text) for text in soup.stripped_strings]

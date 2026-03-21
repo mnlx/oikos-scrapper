@@ -16,3 +16,5 @@ spec:
       parameters:
         - name: run-mode
           value: scheduled
+        - name: publish-select
+          value: +tag:gold

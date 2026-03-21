@@ -1,0 +1,12 @@
+oikos_scrapper:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_POSTGRES_HOST', 'localhost') }}"
+      user: "{{ env_var('DBT_POSTGRES_USER', env_var('POSTGRES_USER', 'app')) }}"
+      password: "{{ env_var('DBT_POSTGRES_PASSWORD', env_var('POSTGRES_PASSWORD', 'change-me-oikos')) }}"
+      port: "{{ env_var('DBT_POSTGRES_PORT', '5432') | as_number }}"
+      dbname: "{{ env_var('DBT_POSTGRES_DB', env_var('POSTGRES_DB', 'app')) }}"
+      schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'public') }}"
+      threads: 4

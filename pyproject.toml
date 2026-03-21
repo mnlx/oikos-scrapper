@@ -7,10 +7,12 @@ name = "oikos-scrapper"
 version = "0.1.0"
 description = "Housing scraper for Greater Florianopolis listings."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
   "alembic>=1.15.2",
   "beautifulsoup4>=4.13.3",
+  "dbt-core>=1.10.3",
+  "dbt-postgres>=1.10.0",
   "httpx>=0.28.1",
   "minio>=7.2.15",
   "playwright>=1.51.0",
