@@ -36,6 +36,7 @@ def extract_listing_from_detail(source: SourceDefinition, html: str, detail_url:
             "address": location["address"],
             "latitude": location["latitude"],
             "longitude": location["longitude"],
+            "raw_html": html,
             "price_sale": prices[0] if prices else None,
             "price_rent": prices[0] if prices else None,
             "bedrooms": features["bedrooms"],
