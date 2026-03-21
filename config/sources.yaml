@@ -56,7 +56,7 @@ sources:
     cities:
       - Florianopolis
     urls:
-      - https://www.junqueiraimobiliaria.com.br/imoveis
+      - https://junqueiraimobiliaria.com.br/
   - code: donno_imoveis
     name: Donno Imoveis
     base_url: https://www.donno.com.br
@@ -65,7 +65,7 @@ sources:
     cities:
       - Florianopolis
     urls:
-      - https://www.donno.com.br/imoveis
+      - https://www.donno.com.br/
   - code: pagani_imoveis
     name: Pagani Imoveis
     base_url: https://www.paganiimoveis.com.br
@@ -84,7 +84,7 @@ sources:
       - Sao Jose
       - Palhoca
     urls:
-      - https://www.4kimoveis.com.br/imoveis
+      - https://4kimoveis.com.br/
   - code: adriano_imoveis
     name: Adriano Carpes Imoveis
     base_url: https://www.adrianocarpes.com.br
@@ -93,7 +93,7 @@ sources:
     cities:
       - Biguacu
     urls:
-      - https://www.adrianocarpes.com.br/imoveis
+      - https://www.adrianocarpes.com.br/
   - code: talyta_imoveis
     name: Talyta Imoveis
     base_url: https://www.talytaimoveis.com.br
@@ -102,13 +102,13 @@ sources:
     cities:
       - Sao Jose
     urls:
-      - https://www.talytaimoveis.com.br/imoveis
+      - https://talytaimoveis.com.br/
   - code: janerson_maciel
     name: Janerson Maciel Imoveis
     base_url: https://www.janersonmaciel.com.br
-    active: true
+    active: false
     preferred_strategy: static_html
     cities:
       - Palhoca
     urls:
-      - https://www.janersonmaciel.com.br/imoveis
+      - https://www.janersonmaciel.com.br/

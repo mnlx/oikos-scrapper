@@ -37,6 +37,16 @@ class ScrapeRunner:
             "browser": BrowserStrategy(),
         }
 
+    def _strategy_sequence(self, preferred_strategy: str) -> list[str]:
+        ordered = [preferred_strategy]
+        if preferred_strategy == "embedded_data":
+            ordered.extend(["browser", "static_html"])
+        elif preferred_strategy == "static_html":
+            ordered.extend(["browser", "embedded_data"])
+        else:
+            ordered.extend(["embedded_data", "static_html"])
+        return list(dict.fromkeys(ordered))
+
     def _session_factory(self):
         if self.session_factory is None:
             self.session_factory = create_session_factory(self.database_url)
@@ -70,65 +80,75 @@ class ScrapeRunner:
         return summaries
 
     def scrape_source(self, source: SourceDefinition, source_record, trigger_type: str) -> SourceRunSummary:
-        strategy_name = source.preferred_strategy
+        strategy_sequence = self._strategy_sequence(source.preferred_strategy)
         with self._session_factory()() as session:
-            run = create_scrape_run(session, source.code, trigger_type, strategy_name)
+            run = create_scrape_run(session, source.code, trigger_type, strategy_sequence[0])
 
-        try:
-            aggregated = StrategyResult(strategy=strategy_name, listings=[])
-            with self._http_client() as client:
-                strategy = self.strategies[strategy_name]
-                for seed_url in source.urls:
-                    result = strategy.scrape_seed(client, source, seed_url)
-                    aggregated.listings.extend(result.listings)
-            with self._session_factory()() as session:
-                inserted, updated = upsert_listings(session, source_record, aggregated.listings)
-                complete_scrape_run(
-                    session,
-                    run,
-                    status="success",
+        last_error: Exception | None = None
+        for strategy_name in strategy_sequence:
+            try:
+                aggregated = StrategyResult(strategy=strategy_name, listings=[])
+                with self._http_client() as client:
+                    strategy = self.strategies[strategy_name]
+                    for seed_url in source.urls:
+                        result = strategy.scrape_seed(client, source, seed_url)
+                        aggregated.listings.extend(result.listings)
+
+                if not aggregated.listings:
+                    LOGGER.info("scrape_strategy_empty", source=source.code, strategy=strategy_name)
+                    continue
+
+                with self._session_factory()() as session:
+                    inserted, updated = upsert_listings(session, source_record, aggregated.listings)
+                    complete_scrape_run(
+                        session,
+                        run,
+                        status="success",
+                        items_seen=len(aggregated.listings),
+                        items_inserted=inserted,
+                        items_updated=updated,
+                        error_count=0,
+                    )
+                LOGGER.info(
+                    "scrape_complete",
+                    source=source.code,
+                    strategy=strategy_name,
+                    items_seen=len(aggregated.listings),
+                    inserted=inserted,
+                    updated=updated,
+                )
+                return SourceRunSummary(
+                    source_code=source.code,
+                    strategy=strategy_name,
                     items_seen=len(aggregated.listings),
                     items_inserted=inserted,
                     items_updated=updated,
                     error_count=0,
                 )
-            LOGGER.info(
-                "scrape_complete",
-                source=source.code,
-                strategy=strategy_name,
-                items_seen=len(aggregated.listings),
-                inserted=inserted,
-                updated=updated,
-            )
-            return SourceRunSummary(
-                source_code=source.code,
-                strategy=strategy_name,
-                items_seen=len(aggregated.listings),
-                items_inserted=inserted,
-                items_updated=updated,
-                error_count=0,
-            )
-        except Exception as exc:
-            with self._session_factory()() as session:
-                complete_scrape_run(
-                    session,
-                    run,
-                    status="failed",
-                    items_seen=0,
-                    items_inserted=0,
-                    items_updated=0,
-                    error_count=1,
-                    last_error=str(exc),
-                )
-            LOGGER.exception("scrape_failed", source=source.code, strategy=strategy_name)
-            return SourceRunSummary(
-                source_code=source.code,
-                strategy=strategy_name,
+            except Exception as exc:
+                last_error = exc
+                LOGGER.warning("scrape_strategy_failed", source=source.code, strategy=strategy_name, error=str(exc))
+
+        with self._session_factory()() as session:
+            complete_scrape_run(
+                session,
+                run,
+                status="failed",
                 items_seen=0,
                 items_inserted=0,
                 items_updated=0,
                 error_count=1,
+                last_error=str(last_error or "no listings extracted"),
             )
+        LOGGER.exception("scrape_failed", source=source.code, strategy=strategy_sequence[0])
+        return SourceRunSummary(
+            source_code=source.code,
+            strategy=strategy_sequence[0],
+            items_seen=0,
+            items_inserted=0,
+            items_updated=0,
+            error_count=1,
+        )
 
     def benchmark_source(self, source_code: str) -> dict[str, dict[str, int | str]]:
         source = self.config.find_source(source_code)
