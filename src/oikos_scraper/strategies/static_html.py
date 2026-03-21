@@ -6,8 +6,10 @@ import httpx
 
 from oikos_scraper.config import SourceDefinition
 from oikos_scraper.heuristics import (
+    compact_text,
     extract_description_from_html,
     extract_detail_links,
+    extract_location_fields_from_html,
     extract_numeric_features,
     extract_text_blocks,
     extract_title_from_html,
@@ -22,13 +24,18 @@ def extract_listing_from_detail(source: SourceDefinition, html: str, detail_url:
     texts = extract_text_blocks(html)
     prices = find_price_candidates(texts[:40])
     features = extract_numeric_features(texts[:80])
+    location = extract_location_fields_from_html(html, fallback_city=source.cities[0] if source.cities else None)
     return normalize_listing(
         source,
         {
             "canonical_url": detail_url,
             "title": extract_title_from_html(html),
             "description": extract_description_from_html(html),
-            "city": " ".join(texts[:20]),
+            "city": location["city"] or " ".join(texts[:20]),
+            "neighborhood": location["neighborhood"],
+            "address": location["address"],
+            "latitude": location["latitude"],
+            "longitude": location["longitude"],
             "price_sale": prices[0] if prices else None,
             "price_rent": prices[0] if prices else None,
             "bedrooms": features["bedrooms"],
@@ -43,6 +50,31 @@ def extract_listing_from_detail(source: SourceDefinition, html: str, detail_url:
         },
         seed_url,
     )
+
+
+def enrich_listing_from_detail_html(listing: ListingDraft, html: str) -> ListingDraft:
+    location = extract_location_fields_from_html(html, fallback_city=listing.city)
+    if not listing.address and location["address"]:
+        listing.address = compact_text(str(location["address"])) or None
+    if not listing.neighborhood and location["neighborhood"]:
+        listing.neighborhood = compact_text(str(location["neighborhood"])) or None
+    if listing.latitude is None and location["latitude"] is not None:
+        listing.latitude = location["latitude"]
+    if listing.longitude is None and location["longitude"] is not None:
+        listing.longitude = location["longitude"]
+    if location["city"] and listing.city != location["city"]:
+        listing.city = str(location["city"])
+
+    listing.raw_payload = {
+        **listing.raw_payload,
+        "detail_enrichment": {
+            "address": listing.address,
+            "neighborhood": listing.neighborhood,
+            "latitude": str(listing.latitude) if listing.latitude is not None else None,
+            "longitude": str(listing.longitude) if listing.longitude is not None else None,
+        },
+    }
+    return listing
 
 
 class StaticHTMLStrategy(ScrapeStrategy):

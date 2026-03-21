@@ -48,6 +48,83 @@ sources:
     urls:
       - https://www.imovelweb.com.br/imoveis-venda-florianopolis-sc.html
       - https://www.imovelweb.com.br/imoveis-aluguel-florianopolis-sc.html
+  - code: brognoli
+    name: Brognoli
+    base_url: https://www.brognoli.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Florianopolis
+      - Sao Jose
+    urls:
+      - https://www.brognoli.com.br/comprar/cidade/florianopolis/1/
+      - https://www.brognoli.com.br/comprar/cidade/sao-jose/1/
+      - https://www.brognoli.com.br/alugar/
+  - code: sanremo
+    name: San Remo Imoveis
+    base_url: https://www.sanremoimoveis.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Florianopolis
+      - Sao Jose
+    urls:
+      - https://www.sanremoimoveis.com.br/venda
+      - https://www.sanremoimoveis.com.br/aluguel
+  - code: ibagy
+    name: Ibagy
+    base_url: https://ibagy.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Florianopolis
+      - Sao Jose
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://ibagy.com.br/busca?finalidade=aluguel&categoriagrupo=Residencial
+  - code: imobiliaria_biguacu
+    name: Imobiliaria Biguacu
+    base_url: https://imobiliariabiguacu.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Biguacu
+    urls:
+      - https://imobiliariabiguacu.com.br/venda?categoriagrupo=&finalidade=venda&cidadebairro%5B%5D=bigua%C3%A7u&cidadebairro%5B%5D=bigua%C3%A7u%2C%20rio-caveiras&valorvenda=0%2C1099999&valorlocacao=0%2C11000&area=0%2C509&codigo=&ordenar=precoAsc&pagina=1
+      - https://imobiliariabiguacu.com.br/aluguel/residencial_comercial/?categoriagrupo=residencial_comercial&finalidade=aluguel&valorvenda=0%2C1099999&valorlocacao=0%2C11000&valorlocacao=0%2C11000&area=0%2C509&codigo=&ordenar=relevancia&pagina=1
+  - code: help_imoveis
+    name: Help Imoveis
+    base_url: https://www.helpimoveis.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Florianopolis
+      - Sao Jose
+    urls:
+      - https://www.helpimoveis.com.br/venda
+      - https://www.helpimoveis.com.br/aluguel
+  - code: cambirela_imoveis
+    name: Cambirela Imoveis
+    base_url: https://www.cambirelaimoveis.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Sao Jose
+      - Palhoca
+    urls:
+      - https://cambirelaimoveis.com.br/imoveis/comprar
+      - https://cambirelaimoveis.com.br/imoveis/aluguel
+  - code: acho_imoveis
+    name: Acho Imoveis
+    base_url: https://www.achoimoveis.com.br
+    active: true
+    preferred_strategy: static_html
+    cities:
+      - Palhoca
+    urls:
+      - https://www.achoimoveis.com.br/imovel/venda/casa
+      - https://www.achoimoveis.com.br/imovel/venda/apartamento
   - code: junqueira_imobiliaria
     name: Junqueira Imobiliaria
     base_url: https://www.junqueiraimobiliaria.com.br
