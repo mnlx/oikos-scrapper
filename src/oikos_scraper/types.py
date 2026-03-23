@@ -31,6 +31,8 @@ class ListingDraft:
     description: str | None = None
     broker_name: str | None = None
     published_at: str | None = None
+    listing_created_at: str | None = None
+    listing_updated_at: str | None = None
     raw_payload: dict[str, Any] = field(default_factory=dict)
 
 
@@ -101,6 +103,8 @@ class ParsedListingRecord:
     description: str | None
     broker_name: str | None
     published_at: str | None
+    listing_created_at: str | None
+    listing_updated_at: str | None
     image_uris: list[str]
     asset_links: list[str]
     screenshot_uri: str | None
@@ -108,3 +112,14 @@ class ParsedListingRecord:
     metadata_uri: str | None
     raw_payload: dict[str, Any] = field(default_factory=dict)
     parsed_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class GeocodeResult:
+    query: str
+    provider: str
+    latitude: Decimal
+    longitude: Decimal
+    confidence: Decimal | None = None
+    display_name: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)

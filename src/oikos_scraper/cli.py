@@ -50,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     enrich_assets.add_argument("--config", default=source_config_default)
     enrich_assets.add_argument("--source", action="append", default=[])
 
+    enrich_geocodes = subparsers.add_parser("enrich-geocodes")
+    enrich_geocodes.add_argument("--config", default=source_config_default)
+    enrich_geocodes.add_argument("--source", action="append", default=[])
+    enrich_geocodes.add_argument("--limit", type=int, default=200)
+
     publish = subparsers.add_parser("publish")
     publish.add_argument("--select", default="tag:gold")
 
@@ -157,6 +162,16 @@ def main() -> None:
         config = load_config(args.config)
         runner = ScrapeRunner(config)
         summaries = runner.enrich_assets_sources(args.source or None)
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
+    if args.command == "enrich-geocodes":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
+        summaries = runner.enrich_geocodes(
+            source_codes=args.source or None,
+            limit=args.limit,
+        )
         print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 

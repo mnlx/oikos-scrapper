@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import urljoin
 
 import httpx
+from bs4 import BeautifulSoup
 
 from oikos_scraper.config import SourceDefinition
 from oikos_scraper.heuristics import (
@@ -20,11 +22,50 @@ from oikos_scraper.strategies.base import ScrapeStrategy
 from oikos_scraper.types import ListingDraft, StrategyResult
 
 
+TIMESTAMP_META_NAMES = (
+    ("published_at", ("article:published_time", "og:published_time", "published_time", "datePublished")),
+    ("listing_created_at", ("article:published_time", "created_time", "createdAt", "dateCreated")),
+    ("listing_updated_at", ("article:modified_time", "og:updated_time", "updated_time", "dateModified", "updatedAt")),
+)
+
+
+def extract_listing_dates_from_html(html: str) -> dict[str, str | None]:
+    soup = BeautifulSoup(html, "html.parser")
+    values: dict[str, str | None] = {
+        "published_at": None,
+        "listing_created_at": None,
+        "listing_updated_at": None,
+    }
+    for field_name, candidates in TIMESTAMP_META_NAMES:
+        for key in candidates:
+            node = soup.find("meta", attrs={"property": key}) or soup.find("meta", attrs={"name": key}) or soup.find(
+                "meta",
+                attrs={"itemprop": key},
+            )
+            if node and node.get("content"):
+                values[field_name] = str(node["content"]).strip()
+                break
+    if values["published_at"] is None:
+        match = re.search(r'"datePublished"\s*:\s*"([^"]+)"', html)
+        if match:
+            values["published_at"] = match.group(1).strip()
+    if values["listing_created_at"] is None:
+        match = re.search(r'"dateCreated"\s*:\s*"([^"]+)"', html)
+        if match:
+            values["listing_created_at"] = match.group(1).strip()
+    if values["listing_updated_at"] is None:
+        match = re.search(r'"dateModified"\s*:\s*"([^"]+)"', html)
+        if match:
+            values["listing_updated_at"] = match.group(1).strip()
+    return values
+
+
 def extract_listing_from_detail(source: SourceDefinition, html: str, detail_url: str, seed_url: str) -> ListingDraft | None:
     texts = extract_text_blocks(html)
     prices = find_price_candidates(texts[:40])
     features = extract_numeric_features(texts[:80])
     location = extract_location_fields_from_html(html, fallback_city=source.cities[0] if source.cities else None)
+    timestamps = extract_listing_dates_from_html(html)
     return normalize_listing(
         source,
         {
@@ -36,6 +77,9 @@ def extract_listing_from_detail(source: SourceDefinition, html: str, detail_url:
             "address": location["address"],
             "latitude": location["latitude"],
             "longitude": location["longitude"],
+            "published_at": timestamps["published_at"],
+            "listing_created_at": timestamps["listing_created_at"],
+            "listing_updated_at": timestamps["listing_updated_at"],
             "raw_html": html,
             "price_sale": prices[0] if prices else None,
             "price_rent": prices[0] if prices else None,

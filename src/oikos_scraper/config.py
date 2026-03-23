@@ -13,6 +13,11 @@ class SourceDefinition(BaseModel):
     active: bool = True
     group: str = "agency"
     preferred_strategy: str = "embedded_data"
+    signal_category: str | None = None
+    source_type: str = "report"
+    publisher: str | None = None
+    parser: str | None = None
+    geographic_scope: str = "city"
     cities: list[str] = Field(default_factory=list)
     urls: list[str] = Field(default_factory=list)
 

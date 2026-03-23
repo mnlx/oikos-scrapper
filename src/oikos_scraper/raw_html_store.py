@@ -27,6 +27,7 @@ class RawHtmlStore:
         base_hash = offering_hash(listing.source_code, listing.external_id)
         key = BronzePathSpec(
             layer="bronze",
+            dataset="listings",
             category="html",
             run_at=datetime.now(UTC),
             base_hash=base_hash,
