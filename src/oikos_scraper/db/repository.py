@@ -15,6 +15,8 @@ from oikos_scraper.db.models import (
     ListingAsset,
     ListingArtifact,
     ListingIngestion,
+    LlmEnrichment,
+    NeighborhoodArtifact,
     NeighborhoodFile,
     NeighborhoodSignal,
     ScrapeRun,
@@ -177,6 +179,8 @@ def upsert_listings(session: Session, source: Source, listings: list[ListingDraf
             "description": listing.description,
             "broker_name": listing.broker_name,
             "published_at": listing.published_at,
+            "listing_created_at": listing.listing_created_at,
+            "listing_updated_at": listing.listing_updated_at,
             "first_seen_at": now,
             "last_seen_at": now,
             "last_scraped_at": now,
@@ -230,6 +234,9 @@ def upsert_listing_ingestion(
         strategy=strategy,
         city=listing.city,
         broker_name=listing.broker_name,
+        published_at=listing.published_at,
+        listing_created_at=listing.listing_created_at,
+        listing_updated_at=listing.listing_updated_at,
         image_urls=image_urls,
         asset_links=asset_links,
         screenshot_uri=screenshot_uri,
@@ -249,6 +256,9 @@ def upsert_listing_ingestion(
             "strategy": strategy,
             "city": listing.city,
             "broker_name": listing.broker_name,
+            "published_at": listing.published_at,
+            "listing_created_at": listing.listing_created_at,
+            "listing_updated_at": listing.listing_updated_at,
             "image_urls": sanitize_json_value(image_urls),
             "asset_links": sanitize_json_value(asset_links),
             "screenshot_uri": screenshot_uri,
@@ -302,6 +312,146 @@ def replace_listing_artifacts(
             )
         )
     session.commit()
+
+
+def list_listings_for_price_enrichment(
+    session: Session,
+    source_codes: list[str] | None = None,
+    limit: int = 100,
+) -> list[BronzeListing]:
+    statement = select(BronzeListing).where(
+        BronzeListing.price_sale.is_(None),
+        BronzeListing.price_rent.is_(None),
+        BronzeListing.canonical_url.is_not(None),
+    )
+    if source_codes:
+        statement = statement.where(BronzeListing.source_code.in_(source_codes))
+    statement = statement.order_by(BronzeListing.parsed_at.desc()).limit(limit)
+    return session.execute(statement).scalars().all()
+
+
+def update_listing_price(
+    session: Session,
+    *,
+    listing_id: int,
+    transaction_type: str,
+    price: Decimal,
+    enrichment_source: str,
+) -> None:
+    now = datetime.now(UTC)
+    listing = session.get(BronzeListing, listing_id)
+    if listing is None:
+        return
+    if transaction_type == "rent":
+        listing.price_rent = price
+    else:
+        listing.price_sale = price
+    listing.price_enriched_at = now
+    listing.price_enrichment_source = enrichment_source
+    session.add(listing)
+    session.commit()
+
+
+def list_listings_for_llm_enrichment(
+    session: Session,
+    source_codes: list[str] | None = None,
+    limit: int = 50,
+) -> list[BronzeListing]:
+    enriched_hashes = select(LlmEnrichment.offering_hash)
+    statement = (
+        select(BronzeListing)
+        .where(BronzeListing.offering_hash.not_in(enriched_hashes))
+    )
+    if source_codes:
+        statement = statement.where(BronzeListing.source_code.in_(source_codes))
+    statement = statement.order_by(BronzeListing.parsed_at.desc()).limit(limit)
+    return session.execute(statement).scalars().all()
+
+
+_TRANSACTION_TYPE_MAP = {
+    "venda": "sale", "sale": "sale", "compra": "sale",
+    "aluguel": "rent", "rent": "rent", "locação": "rent", "locacao": "rent",
+}
+
+_PROPERTY_TYPE_MAP = {
+    "apartamento": "apartment", "apto": "apartment", "apartment": "apartment",
+    "casa": "house", "house": "house", "sobrado": "house",
+    "comercial": "commercial", "commercial": "commercial", "loja": "commercial",
+    "terreno": "land", "land": "land", "lote": "land",
+    "other": "other", "outro": "other",
+}
+
+
+def upsert_llm_enrichment(
+    session: Session,
+    *,
+    offering_hash: str,
+    source_code: str,
+    external_id: str,
+    llm_model: str,
+    extracted: dict[str, Any],
+    llm_input: dict[str, Any],
+) -> LlmEnrichment:
+    now = datetime.now(UTC)
+
+    def _decimal(val: Any) -> Decimal | None:
+        if val is None:
+            return None
+        try:
+            # Strip currency symbols and thousands separators
+            cleaned = str(val).replace("R$", "").replace(".", "").replace(",", ".").strip()
+            return Decimal(cleaned)
+        except Exception:
+            return None
+
+    def _int(val: Any) -> int | None:
+        try:
+            return int(val) if val is not None else None
+        except Exception:
+            return None
+
+    def _str(val: Any, max_len: int | None = None) -> str | None:
+        if val is None:
+            return None
+        s = str(val).strip() or None
+        if s and max_len:
+            s = s[:max_len]
+        return s
+
+    def _normalize(val: Any, mapping: dict[str, str]) -> str | None:
+        s = _str(val)
+        if not s:
+            return None
+        return mapping.get(s.lower(), s.lower())
+
+    row_values = dict(
+        offering_hash=offering_hash,
+        source_code=source_code,
+        external_id=external_id,
+        llm_price_sale=_decimal(extracted.get("price_sale")),
+        llm_price_rent=_decimal(extracted.get("price_rent")),
+        llm_condo_fee=_decimal(extracted.get("condo_fee")),
+        llm_iptu=_decimal(extracted.get("iptu")),
+        llm_address=_str(extracted.get("address")),
+        llm_neighborhood=_str(extracted.get("neighborhood"), 255),
+        llm_city=_str(extracted.get("city"), 120),
+        llm_bedrooms=_int(extracted.get("bedrooms")),
+        llm_bathrooms=_int(extracted.get("bathrooms")),
+        llm_parking_spaces=_int(extracted.get("parking_spaces")),
+        llm_area_m2=_decimal(extracted.get("area_m2")),
+        llm_property_type=_normalize(extracted.get("property_type"), _PROPERTY_TYPE_MAP),
+        llm_transaction_type=_normalize(extracted.get("transaction_type"), _TRANSACTION_TYPE_MAP),
+        llm_model=llm_model,
+        enriched_at=now,
+        llm_input=sanitize_json_value(llm_input),
+    )
+    statement = insert(LlmEnrichment).values(**row_values).on_conflict_do_update(
+        index_elements=["offering_hash"],
+        set_={k: v for k, v in row_values.items() if k != "offering_hash"},
+    ).returning(LlmEnrichment)
+    row = session.execute(statement).scalar_one()
+    session.commit()
+    return row
 
 
 def list_ingestions(session: Session, source_codes: list[str] | None = None) -> list[ListingIngestion]:
@@ -421,7 +571,7 @@ def upsert_neighborhood_file(
         collected_at=now,
         parsed_at=None,
     ).on_conflict_do_update(
-        constraint="uq_neighborhood_files_source_url",
+        constraint="uq_raw_neighborhood_files_source_url",
         set_={
             "source_name": source.name,
             "base_url": source.base_url,
@@ -448,6 +598,55 @@ def upsert_neighborhood_file(
             "collected_at": now,
         },
     ).returning(NeighborhoodFile)
+    row = session.execute(statement).scalar_one()
+    session.commit()
+    return row
+
+
+def upsert_neighborhood_artifact(
+    session: Session,
+    *,
+    file_row: NeighborhoodFile,
+    asset_id: int,
+    asset_type: str,
+    asset_url: str,
+    asset_uri: str,
+    is_scrapped: bool,
+    content_type: str | None,
+    checksum_sha256: str | None,
+    size_bytes: int | None,
+) -> NeighborhoodArtifact:
+    now = datetime.now(UTC)
+    row_id = f"{file_row.source_code}:{file_row.id}:{asset_id}"
+    statement = insert(NeighborhoodArtifact).values(
+        id=row_id,
+        neighborhood_file_id=file_row.id,
+        source_code=file_row.source_code,
+        source_url=file_row.source_url,
+        asset_id=asset_id,
+        asset_type=asset_type,
+        asset_url=asset_url,
+        asset_uri=asset_uri,
+        content_type=content_type,
+        checksum_sha256=checksum_sha256,
+        size_bytes=size_bytes,
+        is_scrapped=is_scrapped,
+        discovered_at=now,
+        scrapped_at=now if is_scrapped else None,
+    ).on_conflict_do_update(
+        constraint="uq_raw_neighborhood_artifacts_file_url",
+        set_={
+            "id": row_id,
+            "asset_id": asset_id,
+            "asset_type": asset_type,
+            "asset_uri": asset_uri,
+            "content_type": content_type,
+            "checksum_sha256": checksum_sha256,
+            "size_bytes": size_bytes,
+            "is_scrapped": is_scrapped,
+            "scrapped_at": now if is_scrapped else NeighborhoodArtifact.scrapped_at,
+        },
+    ).returning(NeighborhoodArtifact)
     row = session.execute(statement).scalar_one()
     session.commit()
     return row
@@ -567,6 +766,8 @@ def upsert_bronze_listing(
         description=record.description,
         broker_name=record.broker_name,
         published_at=record.published_at,
+        listing_created_at=record.listing_created_at,
+        listing_updated_at=record.listing_updated_at,
         image_uris=sanitize_json_value(record.image_uris),
         asset_links=sanitize_json_value(record.asset_links),
         screenshot_uri=record.screenshot_uri,
@@ -600,6 +801,8 @@ def upsert_bronze_listing(
             "description": record.description,
             "broker_name": record.broker_name,
             "published_at": record.published_at,
+            "listing_created_at": record.listing_created_at,
+            "listing_updated_at": record.listing_updated_at,
             "image_uris": sanitize_json_value(record.image_uris),
             "asset_links": sanitize_json_value(record.asset_links),
             "screenshot_uri": record.screenshot_uri,

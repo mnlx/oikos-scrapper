@@ -62,6 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--config", default=source_config_default)
     benchmark.add_argument("--source", required=True)
 
+    llm_enrich = subparsers.add_parser("llm-enrich")
+    llm_enrich.add_argument("--config", default=source_config_default)
+    llm_enrich.add_argument("--source", action="append", default=[])
+    llm_enrich.add_argument("--limit", type=int, default=50)
+
+    enrich_prices = subparsers.add_parser("enrich-prices")
+    enrich_prices.add_argument("--config", default=source_config_default)
+    enrich_prices.add_argument("--source", action="append", default=[])
+    enrich_prices.add_argument("--limit", type=int, default=100)
+
     neighborhood_ingest = subparsers.add_parser("neighborhood-ingest")
     neighborhood_ingest.add_argument("--config", default=neighborhood_config_default)
     neighborhood_ingest.add_argument("--run-mode", default="scheduled")
@@ -70,6 +80,10 @@ def build_parser() -> argparse.ArgumentParser:
     neighborhood_parse = subparsers.add_parser("neighborhood-parse")
     neighborhood_parse.add_argument("--config", default=neighborhood_config_default)
     neighborhood_parse.add_argument("--source", action="append", default=[])
+
+    neighborhood_enrich_assets = subparsers.add_parser("neighborhood-enriching-assets")
+    neighborhood_enrich_assets.add_argument("--config", default=neighborhood_config_default)
+    neighborhood_enrich_assets.add_argument("--source", action="append", default=[])
 
     neighborhood_publish = subparsers.add_parser("neighborhood-publish")
     neighborhood_publish.add_argument("--select", default="mart_neighborhood_signals mart_neighborhood_files")
@@ -175,6 +189,26 @@ def main() -> None:
         print(json.dumps(runner.benchmark_source(args.source), indent=2))
         return
 
+    if args.command == "llm-enrich":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
+        summaries = runner.enrich_with_llm(
+            source_codes=args.source or None,
+            limit=args.limit,
+        )
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
+    if args.command == "enrich-prices":
+        config = load_config(args.config)
+        runner = ScrapeRunner(config)
+        summaries = runner.enrich_prices(
+            source_codes=args.source or None,
+            limit=args.limit,
+        )
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
     if args.command == "neighborhood-ingest":
         runner = build_neighborhood_runner(args.config)
         summaries = runner.ingest_sources(args.source or None, trigger_type=args.run_mode)
@@ -184,6 +218,12 @@ def main() -> None:
     if args.command == "neighborhood-parse":
         runner = build_neighborhood_runner(args.config)
         summaries = runner.parse_sources(args.source or None)
+        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
+        return
+
+    if args.command == "neighborhood-enriching-assets":
+        runner = build_neighborhood_runner(args.config)
+        summaries = runner.enrich_assets_sources(args.source or None)
         print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 

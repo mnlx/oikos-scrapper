@@ -22,14 +22,18 @@ from oikos_scraper.db.repository import (
     ensure_sources,
     list_artifacts_for_ingestion,
     list_ingestions,
+    list_listings_for_llm_enrichment,
+    list_listings_for_price_enrichment,
     replace_listing_artifacts,
+    update_listing_price,
     upsert_listing_asset,
     upsert_bronze_listing,
     upsert_listing_ingestion,
     upsert_listings,
+    upsert_llm_enrichment,
 )
 from oikos_scraper.db.session import create_session_factory
-from oikos_scraper.heuristics import ASSET_SUFFIXES, extract_asset_links, extract_follow_links, extract_image_urls
+from oikos_scraper.heuristics import ASSET_SUFFIXES, extract_asset_links, extract_follow_links, extract_image_urls, extract_text_blocks, find_price_candidates
 from oikos_scraper.normalizer import normalize_listing
 from oikos_scraper.object_store import BronzePathSpec, build_bronze_object_store, offering_hash
 from oikos_scraper.settings import get_setting
@@ -40,6 +44,16 @@ from oikos_scraper.strategies.static_html import StaticHTMLStrategy, enrich_list
 from oikos_scraper.types import CrawledPage, ListingArtifactBundle, ListingDraft, ParsedListingRecord, StoredObject, StrategyResult
 
 LOGGER = structlog.get_logger(__name__)
+
+LLM_EXTRACTION_PROMPT = """Fill in this JSON with values extracted from the listing. Use null for missing values.
+
+Title: {title}
+City: {city}
+Neighborhood: {neighborhood}
+Address: {address}
+Description: {description}
+
+{{"price_sale":null,"price_rent":null,"condo_fee":null,"iptu":null,"address":null,"neighborhood":null,"city":null,"bedrooms":null,"bathrooms":null,"parking_spaces":null,"area_m2":null,"property_type":null,"transaction_type":null}}"""
 
 
 @dataclass(slots=True)
@@ -78,6 +92,22 @@ class AssetEnrichmentSummary:
     error_count: int
 
 
+@dataclass(slots=True)
+class PriceEnrichmentSummary:
+    source_code: str
+    processed: int
+    enriched: int
+    error_count: int
+
+
+@dataclass(slots=True)
+class LlmEnrichmentSummary:
+    source_code: str
+    processed: int
+    enriched: int
+    error_count: int
+
+
 class ScrapeRunner:
     def __init__(self, config: AppConfig, database_url: str | None = None) -> None:
         self.config = config
@@ -102,6 +132,9 @@ class ScrapeRunner:
         }
         if self.selenium_remote_url:
             self.strategies["selenium"] = SeleniumGridStrategy(self.selenium_remote_url)
+        self.ollama_url = get_setting("OIKOS_OLLAMA_URL", "http://ollama.llm.svc.cluster.local:11434") or "http://ollama.llm.svc.cluster.local:11434"
+        self.ollama_model = get_setting("OIKOS_OLLAMA_MODEL", "qwen3:4b") or "qwen3:4b"
+        self.ollama_token = get_setting("OIKOS_OLLAMA_TOKEN")
 
     def _project_root(self) -> Path:
         return Path(__file__).resolve().parents[2]
@@ -755,6 +788,8 @@ class ScrapeRunner:
                         description=listing.description,
                         broker_name=listing.broker_name,
                         published_at=listing.published_at,
+                        listing_created_at=listing.listing_created_at,
+                        listing_updated_at=listing.listing_updated_at,
                         image_uris=[],
                         asset_links=list(ingestion.asset_links or []),
                         screenshot_uri=ingestion.screenshot_uri
@@ -799,6 +834,173 @@ class ScrapeRunner:
         if select:
             command.extend(["--select", select])
         return subprocess.run(command, check=True, text=True, capture_output=True, env=env)
+
+    def _fetch_page_html_with_source(self, client: httpx.Client, url: str) -> tuple[str, str]:
+        """Fetch page HTML with httpx → playwright → selenium fallback. Returns (html, source_name)."""
+        try:
+            response = client.get(url)
+            response.raise_for_status()
+            return response.text, "httpx"
+        except Exception:
+            pass
+        html = self._playwright_page_html(url)
+        if html:
+            return html, "playwright"
+        html = self._selenium_page_html(url)
+        if html:
+            return html, "selenium"
+        raise RuntimeError(f"unable to fetch {url} with any strategy")
+
+    def enrich_prices(
+        self,
+        source_codes: list[str] | None = None,
+        limit: int = 100,
+    ) -> list[PriceEnrichmentSummary]:
+        with self._session_factory()() as session:
+            listings = list_listings_for_price_enrichment(session, source_codes=source_codes, limit=limit)
+
+        grouped: dict[str, list] = {}
+        for listing in listings:
+            grouped.setdefault(listing.source_code, []).append(listing)
+
+        summaries: list[PriceEnrichmentSummary] = []
+        for source_code, rows in grouped.items():
+            processed = 0
+            enriched = 0
+            error_count = 0
+            with self._http_client() as client:
+                for listing in rows:
+                    processed += 1
+                    try:
+                        html, fetch_source = self._fetch_page_html_with_source(client, listing.canonical_url)
+                        prices = find_price_candidates(extract_text_blocks(html)[:40])
+                        if not prices:
+                            LOGGER.info(
+                                "price_enrichment_no_price",
+                                listing_id=listing.id,
+                                source_code=source_code,
+                                url=listing.canonical_url,
+                            )
+                            continue
+                        with self._session_factory()() as session:
+                            update_listing_price(
+                                session,
+                                listing_id=listing.id,
+                                transaction_type=listing.transaction_type,
+                                price=prices[0],
+                                enrichment_source=fetch_source,
+                            )
+                        enriched += 1
+                        LOGGER.info(
+                            "price_enriched",
+                            listing_id=listing.id,
+                            source_code=source_code,
+                            price=str(prices[0]),
+                            fetch_source=fetch_source,
+                        )
+                    except Exception:
+                        error_count += 1
+                        LOGGER.exception(
+                            "price_enrichment_failed",
+                            listing_id=listing.id,
+                            source_code=source_code,
+                            url=listing.canonical_url,
+                        )
+            summaries.append(
+                PriceEnrichmentSummary(
+                    source_code=source_code,
+                    processed=processed,
+                    enriched=enriched,
+                    error_count=error_count,
+                )
+            )
+        return summaries
+
+    def _call_ollama(self, prompt: str) -> dict:
+        """Call Ollama API with think:false + JSON format. Returns parsed dict."""
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.ollama_token:
+            headers["Authorization"] = f"Bearer {self.ollama_token}"
+        with httpx.Client(timeout=120.0) as client:
+            response = client.post(
+                f"{self.ollama_url}/api/generate",
+                json={
+                    "model": self.ollama_model,
+                    "prompt": prompt,
+                    "format": "json",
+                    "think": False,
+                    "stream": False,
+                    "options": {"temperature": 0},
+                },
+                headers=headers,
+            )
+            response.raise_for_status()
+        raw_response = response.json().get("response", "{}")
+        return json.loads(raw_response)
+
+    def enrich_with_llm(
+        self,
+        source_codes: list[str] | None = None,
+        limit: int = 50,
+    ) -> list[LlmEnrichmentSummary]:
+        with self._session_factory()() as session:
+            listings = list_listings_for_llm_enrichment(session, source_codes=source_codes, limit=limit)
+
+        grouped: dict[str, list] = {}
+        for listing in listings:
+            grouped.setdefault(listing.source_code, []).append(listing)
+
+        summaries: list[LlmEnrichmentSummary] = []
+        for source_code, rows in grouped.items():
+            processed = 0
+            enriched = 0
+            error_count = 0
+            for listing in rows:
+                processed += 1
+                llm_input = {
+                    "title": listing.title or "",
+                    "city": listing.city or "",
+                    "neighborhood": listing.neighborhood or "",
+                    "address": listing.address or "",
+                    "description": (listing.description or "")[:2000],
+                }
+                prompt = LLM_EXTRACTION_PROMPT.format(**llm_input)
+                try:
+                    extracted = self._call_ollama(prompt)
+                    with self._session_factory()() as session:
+                        upsert_llm_enrichment(
+                            session,
+                            offering_hash=listing.offering_hash,
+                            source_code=listing.source_code,
+                            external_id=listing.external_id,
+                            llm_model=self.ollama_model,
+                            extracted=extracted,
+                            llm_input=llm_input,
+                        )
+                    enriched += 1
+                    LOGGER.info(
+                        "llm_enrichment_done",
+                        offering_hash=listing.offering_hash,
+                        source_code=source_code,
+                        price_sale=extracted.get("price_sale"),
+                        price_rent=extracted.get("price_rent"),
+                    )
+                except Exception:
+                    error_count += 1
+                    LOGGER.exception(
+                        "llm_enrichment_failed",
+                        offering_hash=listing.offering_hash,
+                        source_code=source_code,
+                    )
+            summaries.append(
+                LlmEnrichmentSummary(
+                    source_code=source_code,
+                    processed=processed,
+                    enriched=enriched,
+                    error_count=error_count,
+                )
+            )
+        return summaries
 
     def benchmark_source(self, source_code: str) -> dict[str, dict[str, int | str]]:
         source = self.config.find_source(source_code)

@@ -36,6 +36,8 @@ spec:
             template: run-parse
         - - name: publish-api
             template: run-publish
+        - - name: llm-enrich
+            template: run-llm-enrich
     - name: run-ingest
       inputs:
         parameters:
@@ -139,6 +141,32 @@ spec:
           limits:
             cpu: "1"
             memory: 1Gi
+    - name: run-llm-enrich
+      container:
+        image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion
+        imagePullPolicy: Always
+        command:
+          - oikos
+        args:
+          - llm-enrich
+          - --limit
+          - "200"
+          - --config
+          - /etc/oikos/sources.yaml
+        envFrom:
+          - secretRef:
+              name: oikos-scrapper-env
+        volumeMounts:
+          - name: source-config
+            mountPath: /etc/oikos
+            readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
   volumes:
     - name: source-config
       configMap:

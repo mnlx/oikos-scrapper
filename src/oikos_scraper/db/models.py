@@ -71,6 +71,8 @@ class Listing(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     broker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    listing_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    listing_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -98,6 +100,9 @@ class ListingIngestion(Base):
     strategy: Mapped[str] = mapped_column(String(50))
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     broker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    listing_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    listing_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     image_urls: Mapped[list] = mapped_column(JSONB, default=list)
     asset_links: Mapped[list] = mapped_column(JSONB, default=list)
     screenshot_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
@@ -158,6 +163,8 @@ class BronzeListing(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     broker_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    listing_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    listing_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     image_uris: Mapped[list] = mapped_column(JSONB, default=list)
     asset_links: Mapped[list] = mapped_column(JSONB, default=list)
     screenshot_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
@@ -165,6 +172,8 @@ class BronzeListing(Base):
     metadata_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     parsed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    price_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    price_enrichment_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
 
 class ListingAsset(Base):
@@ -190,6 +199,31 @@ class ListingAsset(Base):
     is_scrapped: Mapped[bool] = mapped_column(Boolean, default=False)
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     scrapped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LlmEnrichment(Base):
+    __tablename__ = "mart_listing_llm_enriched"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    offering_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    source_code: Mapped[str] = mapped_column(String(120))
+    external_id: Mapped[str] = mapped_column(String(255))
+    llm_price_sale: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    llm_price_rent: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    llm_condo_fee: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    llm_iptu: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    llm_address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_neighborhood: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    llm_city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    llm_bedrooms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_bathrooms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_parking_spaces: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_area_m2: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    llm_property_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    llm_transaction_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    llm_model: Mapped[str] = mapped_column(String(120))
+    enriched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    llm_input: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
 class NeighborhoodSignal(Base):
@@ -223,10 +257,10 @@ class NeighborhoodSignal(Base):
 
 
 class NeighborhoodFile(Base):
-    __tablename__ = "neighborhood_files"
+    __tablename__ = "raw_neighborhood_files"
     __table_args__ = (
-        UniqueConstraint("source_code", "source_url", name="uq_neighborhood_files_source_url"),
-        Index("ix_neighborhood_files_city_neighborhood", "city", "neighborhood"),
+        UniqueConstraint("source_code", "source_url", name="uq_raw_neighborhood_files_source_url"),
+        Index("ix_raw_neighborhood_files_city_neighborhood", "city", "neighborhood"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -256,3 +290,27 @@ class NeighborhoodFile(Base):
     metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict)
     collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class NeighborhoodArtifact(Base):
+    __tablename__ = "raw_neighborhood_artifacts"
+    __table_args__ = (
+        UniqueConstraint("neighborhood_file_id", "asset_url", name="uq_raw_neighborhood_artifacts_file_url"),
+        Index("ix_raw_neighborhood_artifacts_source_code", "source_code"),
+        Index("ix_raw_neighborhood_artifacts_file_id", "neighborhood_file_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    neighborhood_file_id: Mapped[int] = mapped_column(ForeignKey("raw_neighborhood_files.id"))
+    source_code: Mapped[str] = mapped_column(String(120), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(1200), nullable=False)
+    asset_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    asset_url: Mapped[str] = mapped_column(String(1200), nullable=False)
+    asset_uri: Mapped[str] = mapped_column(String(1200), nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_scrapped: Mapped[bool] = mapped_column(Boolean, default=False)
+    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    scrapped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
