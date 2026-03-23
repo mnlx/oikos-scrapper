@@ -21,10 +21,12 @@ from oikos_scraper.db.repository import (
     create_scrape_run,
     ensure_sources,
     list_artifacts_for_ingestion,
+    list_listings_for_geocode_enrichment,
     list_ingestions,
     list_listings_for_llm_enrichment,
     list_listings_for_price_enrichment,
     replace_listing_artifacts,
+    update_listing_geocode,
     update_listing_price,
     upsert_listing_asset,
     upsert_bronze_listing,
@@ -32,6 +34,7 @@ from oikos_scraper.db.repository import (
     upsert_listings,
     upsert_llm_enrichment,
 )
+from oikos_scraper.geocoding import NominatimGeocoder, build_listing_geocode_query
 from oikos_scraper.db.session import create_session_factory
 from oikos_scraper.heuristics import ASSET_SUFFIXES, extract_asset_links, extract_follow_links, extract_image_urls, extract_text_blocks, find_price_candidates
 from oikos_scraper.normalizer import normalize_listing
@@ -45,15 +48,26 @@ from oikos_scraper.types import CrawledPage, ListingArtifactBundle, ListingDraft
 
 LOGGER = structlog.get_logger(__name__)
 
-LLM_EXTRACTION_PROMPT = """Fill in this JSON with values extracted from the listing. Use null for missing values.
+LLM_EXTRACTION_PROMPT = """Fill in this JSON with values extracted from the real estate listing below. Use the structured fields as hints and the description to fill in any gaps. Return numeric values without currency symbols. For latitude/longitude, only provide values if coordinates appear explicitly in the address or description — otherwise use null.
 
 Title: {title}
+Transaction type: {transaction_type}
+Property type: {property_type}
 City: {city}
+State: {state}
 Neighborhood: {neighborhood}
 Address: {address}
+Price (sale): {price_sale}
+Price (rent): {price_rent}
+Condo fee: {condo_fee}
+IPTU: {iptu}
+Bedrooms: {bedrooms}
+Bathrooms: {bathrooms}
+Parking spaces: {parking_spaces}
+Area m²: {area_m2}
 Description: {description}
 
-{{"price_sale":null,"price_rent":null,"condo_fee":null,"iptu":null,"address":null,"neighborhood":null,"city":null,"bedrooms":null,"bathrooms":null,"parking_spaces":null,"area_m2":null,"property_type":null,"transaction_type":null}}"""
+{{"price_sale":null,"price_rent":null,"condo_fee":null,"iptu":null,"address":null,"neighborhood":null,"city":null,"bedrooms":null,"bathrooms":null,"parking_spaces":null,"area_m2":null,"property_type":null,"transaction_type":null,"latitude":null,"longitude":null}}"""
 
 
 @dataclass(slots=True)
@@ -101,6 +115,15 @@ class PriceEnrichmentSummary:
 
 
 @dataclass(slots=True)
+class GeocodeEnrichmentSummary:
+    source_code: str
+    processed: int
+    enriched: int
+    no_match: int
+    error_count: int
+
+
+@dataclass(slots=True)
 class LlmEnrichmentSummary:
     source_code: str
     processed: int
@@ -135,6 +158,23 @@ class ScrapeRunner:
         self.ollama_url = get_setting("OIKOS_OLLAMA_URL", "http://ollama.llm.svc.cluster.local:11434") or "http://ollama.llm.svc.cluster.local:11434"
         self.ollama_model = get_setting("OIKOS_OLLAMA_MODEL", "qwen3:4b") or "qwen3:4b"
         self.ollama_token = get_setting("OIKOS_OLLAMA_TOKEN")
+        self.geocode_endpoint = (
+            get_setting("OIKOS_GEOCODE_ENDPOINT", "https://nominatim.openstreetmap.org")
+            or "https://nominatim.openstreetmap.org"
+        )
+        self.geocode_provider = get_setting("OIKOS_GEOCODE_PROVIDER", "nominatim") or "nominatim"
+        self.geocode_country = get_setting("OIKOS_GEOCODE_COUNTRY", "Brazil") or "Brazil"
+        self.geocode_accept_language = (
+            get_setting("OIKOS_GEOCODE_ACCEPT_LANGUAGE", "pt-BR,pt;q=0.9,en;q=0.8")
+            or "pt-BR,pt;q=0.9,en;q=0.8"
+        )
+        self.geocode_user_agent = (
+            get_setting("OIKOS_GEOCODE_USER_AGENT", "oikos-scrapper/1.0")
+            or "oikos-scrapper/1.0"
+        )
+        self.geocode_rate_limit_seconds = float(
+            get_setting("OIKOS_GEOCODE_RATE_LIMIT_SECONDS", "1.1") or "1.1"
+        )
 
     def _project_root(self) -> Path:
         return Path(__file__).resolve().parents[2]
@@ -916,6 +956,121 @@ class ScrapeRunner:
             )
         return summaries
 
+    def enrich_geocodes(
+        self,
+        source_codes: list[str] | None = None,
+        limit: int = 200,
+    ) -> list[GeocodeEnrichmentSummary]:
+        with self._session_factory()() as session:
+            listings = list_listings_for_geocode_enrichment(
+                session,
+                source_codes=source_codes,
+                limit=limit,
+            )
+
+        grouped: dict[str, list] = {}
+        for listing in listings:
+            grouped.setdefault(listing.source_code, []).append(listing)
+
+        summaries: list[GeocodeEnrichmentSummary] = []
+        geocoder = NominatimGeocoder(
+            endpoint=self.geocode_endpoint,
+            user_agent=self.geocode_user_agent,
+            accept_language=self.geocode_accept_language,
+            rate_limit_seconds=self.geocode_rate_limit_seconds,
+            provider=self.geocode_provider,
+            country=self.geocode_country,
+        )
+
+        for source_code, rows in grouped.items():
+            processed = 0
+            enriched = 0
+            no_match = 0
+            error_count = 0
+            with self._session_factory()() as session:
+                run = create_scrape_run(
+                    session,
+                    source_code,
+                    "scheduled",
+                    "geocode_enrichment",
+                    pipeline_stage="enriching_geocodes",
+                )
+            with self._http_client() as client:
+                for listing in rows:
+                    processed += 1
+                    query = build_listing_geocode_query(
+                        address=listing.address,
+                        neighborhood=listing.neighborhood,
+                        city=listing.city,
+                        state=listing.state,
+                        country=self.geocode_country,
+                    )
+                    if query is None:
+                        continue
+                    try:
+                        result = geocoder.geocode_listing(
+                            client,
+                            address=listing.address,
+                            neighborhood=listing.neighborhood,
+                            city=listing.city,
+                            state=listing.state,
+                        )
+                        with self._session_factory()() as session:
+                            if result is None:
+                                update_listing_geocode(
+                                    session,
+                                    listing_id=listing.id,
+                                    latitude=None,
+                                    longitude=None,
+                                    provider=self.geocode_provider,
+                                    query=query,
+                                    status="no_match",
+                                    confidence=None,
+                                    payload={},
+                                )
+                                no_match += 1
+                            else:
+                                update_listing_geocode(
+                                    session,
+                                    listing_id=listing.id,
+                                    latitude=result.latitude,
+                                    longitude=result.longitude,
+                                    provider=result.provider,
+                                    query=result.query,
+                                    status="matched",
+                                    confidence=result.confidence,
+                                    payload=result.payload,
+                                )
+                                enriched += 1
+                    except Exception:
+                        error_count += 1
+                        LOGGER.exception(
+                            "geocode_enrichment_failed",
+                            listing_id=listing.id,
+                            source_code=source_code,
+                            query=query,
+                        )
+            with self._session_factory()() as session:
+                complete_scrape_run(
+                    session,
+                    run,
+                    status="success" if error_count == 0 else "partial_success",
+                    items_seen=processed,
+                    items_inserted=enriched + no_match,
+                    items_updated=0,
+                    error_count=error_count,
+                )
+            summaries.append(
+                GeocodeEnrichmentSummary(
+                    source_code=source_code,
+                    processed=processed,
+                    enriched=enriched,
+                    no_match=no_match,
+                    error_count=error_count,
+                )
+            )
+        return summaries
+
     def _call_ollama(self, prompt: str) -> dict:
         """Call Ollama API with think:false + JSON format. Returns parsed dict."""
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -948,7 +1103,7 @@ class ScrapeRunner:
 
         grouped: dict[str, list] = {}
         for listing in listings:
-            grouped.setdefault(listing.source_code, []).append(listing)
+            grouped.setdefault(listing["source_code"], []).append(listing)
 
         summaries: list[LlmEnrichmentSummary] = []
         for source_code, rows in grouped.items():
@@ -958,11 +1113,22 @@ class ScrapeRunner:
             for listing in rows:
                 processed += 1
                 llm_input = {
-                    "title": listing.title or "",
-                    "city": listing.city or "",
-                    "neighborhood": listing.neighborhood or "",
-                    "address": listing.address or "",
-                    "description": (listing.description or "")[:2000],
+                    "title": listing.get("title") or "",
+                    "transaction_type": listing.get("transaction_type") or "",
+                    "property_type": listing.get("property_type") or "",
+                    "city": listing.get("city") or "",
+                    "state": listing.get("state") or "",
+                    "neighborhood": listing.get("neighborhood") or "",
+                    "address": listing.get("address") or "",
+                    "price_sale": listing.get("price_sale") or "",
+                    "price_rent": listing.get("price_rent") or "",
+                    "condo_fee": listing.get("condo_fee") or "",
+                    "iptu": listing.get("iptu") or "",
+                    "bedrooms": listing.get("bedrooms") or "",
+                    "bathrooms": listing.get("bathrooms") or "",
+                    "parking_spaces": listing.get("parking_spaces") or "",
+                    "area_m2": listing.get("area_m2") or "",
+                    "description": (listing.get("description") or "")[:2000],
                 }
                 prompt = LLM_EXTRACTION_PROMPT.format(**llm_input)
                 try:
@@ -970,9 +1136,9 @@ class ScrapeRunner:
                     with self._session_factory()() as session:
                         upsert_llm_enrichment(
                             session,
-                            offering_hash=listing.offering_hash,
-                            source_code=listing.source_code,
-                            external_id=listing.external_id,
+                            offering_hash=listing["offering_hash"],
+                            source_code=listing["source_code"],
+                            external_id=listing["external_id"],
                             llm_model=self.ollama_model,
                             extracted=extracted,
                             llm_input=llm_input,
@@ -980,16 +1146,18 @@ class ScrapeRunner:
                     enriched += 1
                     LOGGER.info(
                         "llm_enrichment_done",
-                        offering_hash=listing.offering_hash,
+                        offering_hash=listing["offering_hash"],
                         source_code=source_code,
                         price_sale=extracted.get("price_sale"),
                         price_rent=extracted.get("price_rent"),
+                        latitude=extracted.get("latitude"),
+                        longitude=extracted.get("longitude"),
                     )
                 except Exception:
                     error_count += 1
                     LOGGER.exception(
                         "llm_enrichment_failed",
-                        offering_hash=listing.offering_hash,
+                        offering_hash=listing["offering_hash"],
                         source_code=source_code,
                     )
             summaries.append(

@@ -34,6 +34,8 @@ spec:
             template: run-enrich-assets
         - - name: parse-bronze
             template: run-parse
+        - - name: enrich-geocodes
+            template: run-enrich-geocodes
         - - name: publish-api
             template: run-publish
         - - name: llm-enrich
@@ -127,6 +129,32 @@ spec:
           - publish
           - --select
           - "{{workflow.parameters.publish-select}}"
+        envFrom:
+          - secretRef:
+              name: oikos-scrapper-env
+        volumeMounts:
+          - name: source-config
+            mountPath: /etc/oikos
+            readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+    - name: run-enrich-geocodes
+      container:
+        image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion
+        imagePullPolicy: Always
+        command:
+          - oikos
+        args:
+          - enrich-geocodes
+          - --limit
+          - "300"
+          - --config
+          - /etc/oikos/sources.yaml
         envFrom:
           - secretRef:
               name: oikos-scrapper-env

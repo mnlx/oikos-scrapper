@@ -4,7 +4,7 @@ from decimal import Decimal
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -330,6 +330,51 @@ def list_listings_for_price_enrichment(
     return session.execute(statement).scalars().all()
 
 
+def list_listings_for_geocode_enrichment(
+    session: Session,
+    source_codes: list[str] | None = None,
+    limit: int = 200,
+) -> list[BronzeListing]:
+    statement = select(BronzeListing).where(
+        BronzeListing.latitude.is_(None),
+        BronzeListing.longitude.is_(None),
+        BronzeListing.geocoded_at.is_(None),
+        BronzeListing.address.is_not(None),
+        BronzeListing.city.is_not(None),
+    )
+    if source_codes:
+        statement = statement.where(BronzeListing.source_code.in_(source_codes))
+    statement = statement.order_by(BronzeListing.parsed_at.desc()).limit(limit)
+    return session.execute(statement).scalars().all()
+
+
+def update_listing_geocode(
+    session: Session,
+    *,
+    listing_id: int,
+    latitude: Decimal | None,
+    longitude: Decimal | None,
+    provider: str,
+    query: str,
+    status: str,
+    confidence: Decimal | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    listing = session.get(BronzeListing, listing_id)
+    if listing is None:
+        return
+    listing.latitude = latitude
+    listing.longitude = longitude
+    listing.geocode_provider = provider
+    listing.geocode_query = query
+    listing.geocode_status = status
+    listing.geocode_confidence = confidence
+    listing.geocode_payload = sanitize_json_value(payload or {})
+    listing.geocoded_at = datetime.now(UTC)
+    session.add(listing)
+    session.commit()
+
+
 def update_listing_price(
     session: Session,
     *,
@@ -356,16 +401,30 @@ def list_listings_for_llm_enrichment(
     session: Session,
     source_codes: list[str] | None = None,
     limit: int = 50,
-) -> list[BronzeListing]:
-    enriched_hashes = select(LlmEnrichment.offering_hash)
-    statement = (
-        select(BronzeListing)
-        .where(BronzeListing.offering_hash.not_in(enriched_hashes))
-    )
+) -> list[dict]:
+    """Query mart_listings for rows not yet LLM-enriched. Returns list of dicts."""
+    where_clauses = ["m.offering_hash NOT IN (SELECT offering_hash FROM mart_listing_llm_enriched)"]
+    params: dict = {"limit": limit}
     if source_codes:
-        statement = statement.where(BronzeListing.source_code.in_(source_codes))
-    statement = statement.order_by(BronzeListing.parsed_at.desc()).limit(limit)
-    return session.execute(statement).scalars().all()
+        where_clauses.append("m.source_code = ANY(:source_codes)")
+        params["source_codes"] = source_codes
+    where_sql = " AND ".join(where_clauses)
+    sql = text(f"""
+        SELECT
+            m.offering_hash, m.source_code, m.external_id,
+            m.title, m.transaction_type, m.property_type,
+            m.city, m.state, m.neighborhood, m.address,
+            m.latitude, m.longitude,
+            m.price_sale, m.price_rent, m.condo_fee, m.iptu,
+            m.bedrooms, m.bathrooms, m.parking_spaces, m.area_m2,
+            m.description
+        FROM mart_listings m
+        WHERE {where_sql}
+        ORDER BY m.last_seen_at DESC
+        LIMIT :limit
+    """)
+    result = session.execute(sql, params)
+    return [row._asdict() for row in result]
 
 
 _TRANSACTION_TYPE_MAP = {
@@ -441,6 +500,8 @@ def upsert_llm_enrichment(
         llm_area_m2=_decimal(extracted.get("area_m2")),
         llm_property_type=_normalize(extracted.get("property_type"), _PROPERTY_TYPE_MAP),
         llm_transaction_type=_normalize(extracted.get("transaction_type"), _TRANSACTION_TYPE_MAP),
+        llm_latitude=_decimal(extracted.get("latitude")),
+        llm_longitude=_decimal(extracted.get("longitude")),
         llm_model=llm_model,
         enriched_at=now,
         llm_input=sanitize_json_value(llm_input),
