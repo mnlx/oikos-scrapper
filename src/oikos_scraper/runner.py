@@ -590,22 +590,16 @@ class ScrapeRunner:
                             [asset_link for page in pages for asset_link in page.asset_links]
                         )
                         for page in pages:
-                            reserved = False
-                            try:
-                                reserved = self.ingest_cache.reserve_page(source.code, page.page_url)
-                            except RedisError as exc:
-                                LOGGER.warning(
-                                    "ingest_cache_failed_open",
+                            if page.depth > 0:
+                                LOGGER.info(
+                                    "ingest_follow_page_skipped",
                                     source=source.code,
+                                    external_id=listing.external_id,
                                     page_url=page.page_url,
-                                    error=str(exc),
+                                    canonical_url=listing.canonical_url,
+                                    depth=page.depth,
                                 )
-                                reserved = True
-                            if not reserved:
-                                cached_skips += 1
-                                LOGGER.info("ingest_cache_page_hit", source=source.code, page_url=page.page_url)
                                 continue
-                            LOGGER.info("ingest_cache_page_miss", source=source.code, page_url=page.page_url)
                             try:
                                 bundle = self._store_bundle(
                                     client=client,
@@ -615,15 +609,6 @@ class ScrapeRunner:
                                     strategy_name=strategy_name,
                                 )
                             except Exception:
-                                try:
-                                    self.ingest_cache.release_page(source.code, page.page_url)
-                                except RedisError as exc:
-                                    LOGGER.warning(
-                                        "ingest_cache_release_failed",
-                                        source=source.code,
-                                        page_url=page.page_url,
-                                        error=str(exc),
-                                    )
                                 raise
                             with self._session_factory()() as session:
                                 try:
@@ -657,15 +642,6 @@ class ScrapeRunner:
                                         bundle=bundle,
                                     )
                                 except Exception:
-                                    try:
-                                        self.ingest_cache.release_page(source.code, page.page_url)
-                                    except RedisError as exc:
-                                        LOGGER.warning(
-                                            "ingest_cache_release_failed",
-                                            source=source.code,
-                                            page_url=page.page_url,
-                                            error=str(exc),
-                                        )
                                     raise
                             listing_ingested = True
                             ingestions_upserted += 1

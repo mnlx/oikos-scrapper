@@ -361,7 +361,7 @@ def test_ingest_source_releases_cache_key_on_store_failure(monkeypatch) -> None:
         state="SC",
         raw_payload={},
     )
-    cache = FakeIngestCache(listing_reserve_outcomes=[True], page_reserve_outcomes=[True])
+    cache = FakeIngestCache(listing_reserve_outcomes=[True])
     runner.ingest_cache = cache
 
     monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
@@ -385,7 +385,6 @@ def test_ingest_source_releases_cache_key_on_store_failure(monkeypatch) -> None:
     summary = runner.ingest_source(source, object(), trigger_type="manual")
 
     assert summary.error_count == 1
-    assert cache.page_release_calls == [("test", "https://example.com/2")]
     assert cache.listing_release_calls == [("test", "test:fail")]
 
 
@@ -431,14 +430,14 @@ def test_ingest_source_fails_open_when_cache_errors(monkeypatch) -> None:
     assert summary.cached_skips == 0
 
 
-def test_ingest_source_skips_cached_page_after_listing_miss(monkeypatch) -> None:
+def test_ingest_source_writes_without_page_cache_gate(monkeypatch) -> None:
     runner = build_runner()
     source = runner.config.find_source("test")
     listing = ListingDraft(
         source_code="test",
-        external_id="test:page-cache",
+        external_id="test:no-page-cache",
         canonical_url="https://example.com/4",
-        title="Page cache",
+        title="No page cache",
         description=None,
         transaction_type="sale",
         property_type="house",
@@ -446,7 +445,8 @@ def test_ingest_source_skips_cached_page_after_listing_miss(monkeypatch) -> None
         state="SC",
         raw_payload={},
     )
-    runner.ingest_cache = FakeIngestCache(listing_reserve_outcomes=[True], page_reserve_outcomes=[False])
+    runner.ingest_cache = FakeIngestCache(listing_reserve_outcomes=[True])
+    bundle = type("Bundle", (), {"html": object(), "screenshot": None, "metadata": object()})()
 
     monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
     monkeypatch.setattr(
@@ -464,15 +464,77 @@ def test_ingest_source_skips_cached_page_after_listing_miss(monkeypatch) -> None
     )
     monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
     monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: (_ for _ in ()).throw(AssertionError("bundle should not be stored on page cache hit")))
-    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not upsert")))
-    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not replace artifacts")))
+    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: bundle)
+    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: None)
 
     summary = runner.ingest_source(source, object(), trigger_type="manual")
 
-    assert summary.ingestions_upserted == 0
-    assert summary.cached_skips == 1
-    assert runner.ingest_cache.page_reserve_calls == [("test", "https://example.com/4")]
+    assert summary.ingestions_upserted == 1
+    assert summary.cached_skips == 0
+    assert runner.ingest_cache.page_reserve_calls == []
+
+
+def test_ingest_source_skips_follow_pages(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    listing = ListingDraft(
+        source_code="test",
+        external_id="test:follow-pages",
+        canonical_url="https://example.com/5",
+        title="Follow pages",
+        description=None,
+        transaction_type="sale",
+        property_type="house",
+        city="Florianopolis",
+        state="SC",
+        raw_payload={},
+    )
+    cache = FakeIngestCache(listing_reserve_outcomes=[True])
+    runner.ingest_cache = cache
+
+    root_page = type("Page", (), {
+        "page_url": "https://example.com/5",
+        "parent_page_url": None,
+        "depth": 0,
+        "image_urls": [],
+        "asset_links": ["https://example.com/assets/root.pdf"],
+        "link_urls": ["https://example.com/extra"],
+        "html": "<html></html>",
+    })()
+    child_page = type("Page", (), {
+        "page_url": "https://example.com/extra",
+        "parent_page_url": "https://example.com/5",
+        "depth": 1,
+        "image_urls": [],
+        "asset_links": ["https://example.com/assets/extra.pdf"],
+        "link_urls": [],
+        "html": "<html></html>",
+    })()
+    bundle = type("Bundle", (), {"html": object(), "screenshot": None, "metadata": object()})()
+    upsert_calls: list[dict] = []
+
+    monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
+    monkeypatch.setattr(runner, "_crawl_listing_pages", lambda client, source, listing: [root_page, child_page])
+    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: bundle)
+    monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "oikos_scraper.runner.upsert_listing_ingestion",
+        lambda *args, **kwargs: upsert_calls.append(kwargs) or object(),
+    )
+    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: None)
+
+    summary = runner.ingest_source(source, object(), trigger_type="manual")
+
+    assert summary.ingestions_upserted == 1
+    assert len(upsert_calls) == 1
+    assert upsert_calls[0]["page_url"] == "https://example.com/5"
+    assert upsert_calls[0]["asset_links"] == [
+        "https://example.com/assets/root.pdf",
+        "https://example.com/assets/extra.pdf",
+    ]
+    assert cache.page_reserve_calls == []
 
 
 def test_normalize_page_url_canonicalizes_fragment_and_slash() -> None:
