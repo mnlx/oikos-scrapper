@@ -57,6 +57,10 @@ class StoredObject:
     def uri(self) -> str:
         return f"s3://{self.bucket}/{self.key}"
 
+    @property
+    def object_uri(self) -> str:
+        return self.uri
+
 
 @dataclass(slots=True)
 class ListingArtifactBundle:

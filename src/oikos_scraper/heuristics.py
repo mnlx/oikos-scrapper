@@ -18,6 +18,9 @@ DECIMAL_RE = re.compile(r"-?\d+(?:\.\d+)?")
 DETAIL_PATH_RE = re.compile(
     r"(imovel|imoveis|apartamento|casa|apto|cobertura|sobrado|empreendimento|empreendimentos|lancamento|lancamentos|unidade)"
 )
+BLOCKED_DETAIL_PATH_RE = re.compile(
+    r"(anunciar|busca|contato|fale-conosco|instagram|investidor|login|pinterest|politica|privacidade|resultados?-de-pesquisa|search|sobre|superlogica|termos|whatsapp|youtube)"
+)
 ADDRESS_HINT_RE = re.compile(
     r"\b(rua|r\.|avenida|av\.|travessa|servid[aã]o|rodovia|estrada|alameda|pra[cç]a)\b",
     re.IGNORECASE,
@@ -174,6 +177,9 @@ def extract_detail_links(html: str, base_url: str) -> list[str]:
     tree = HTMLParser(html)
     seen: set[str] = set()
     links: list[str] = []
+    base_parsed = urlparse(base_url)
+    base_host = base_parsed.netloc.lower()
+    base_normalized = base_url.split("#", 1)[0]
     for node in tree.css("a[href]"):
         href = node.attributes.get("href", "")
         if not href:
@@ -182,11 +188,21 @@ def extract_detail_links(html: str, base_url: str) -> list[str]:
         parsed = urlparse(absolute)
         if parsed.scheme not in {"http", "https"}:
             continue
-        if absolute in seen:
+        normalized = absolute.split("#", 1)[0]
+        path = parsed.path.lower()
+        if parsed.netloc.lower() != base_host:
             continue
-        if DETAIL_PATH_RE.search(absolute):
-            seen.add(absolute)
-            links.append(absolute)
+        if normalized == base_normalized:
+            continue
+        if not path or path == "/":
+            continue
+        if BLOCKED_DETAIL_PATH_RE.search(path):
+            continue
+        if normalized in seen:
+            continue
+        if DETAIL_PATH_RE.search(path):
+            seen.add(normalized)
+            links.append(normalized)
     return links
 
 
@@ -495,8 +511,27 @@ def walk_json(data: object) -> Iterable[dict]:
 def maybe_listing_object(item: dict) -> bool:
     keys = {key.lower() for key in item.keys()}
     return bool(
-        {"title", "name", "url"} & keys
-        and any(key in keys for key in {"price", "pricinginfos", "address", "geo", "listing"})
+        (
+            {"title", "name", "url"} & keys
+            and any(
+                key in keys
+                for key in {
+                    "price",
+                    "pricinginfos",
+                    "address",
+                    "geo",
+                    "listing",
+                    "rentprice",
+                    "saleprice",
+                    "totalcost",
+                }
+            )
+        )
+        or (
+            "id" in keys
+            and any(key in keys for key in {"price", "pricinginfos", "rentprice", "saleprice", "totalcost"})
+            and any(key in keys for key in {"address", "city", "bedrooms", "bathrooms", "area"})
+        )
     )
 
 
