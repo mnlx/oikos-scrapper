@@ -1,0 +1,118 @@
+cities:
+  - Florianopolis
+  - Sao Jose
+  - Biguacu
+  - Palhoca
+property_types: []
+transaction_types: []
+sources:
+  - code: ibge_localidades
+    name: IBGE Localidades API
+    base_url: https://servicodados.ibge.gov.br
+    active: true
+    source_type: api
+    signal_category: market
+    publisher: IBGE
+    parser: flat_json_metrics
+    geographic_scope: city
+    cities:
+      - Florianopolis
+      - Sao Jose
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://servicodados.ibge.gov.br/api/v1/localidades/municipios/4205407
+      - https://servicodados.ibge.gov.br/api/v1/localidades/municipios/4216602
+      - https://servicodados.ibge.gov.br/api/v1/localidades/municipios/4202305
+      - https://servicodados.ibge.gov.br/api/v1/localidades/municipios/4211900
+  - code: geofloripa
+    name: GeoFloripa
+    base_url: https://geo.pmf.sc.gov.br
+    active: true
+    source_type: geodata
+    signal_category: zoning
+    publisher: Prefeitura de Florianopolis
+    geographic_scope: neighborhood
+    cities:
+      - Florianopolis
+    urls:
+      - https://geo.pmf.sc.gov.br/
+  - code: sao_jose_observatorio_imobiliario
+    name: Observatorio Imobiliario de Sao Jose
+    base_url: https://saojose.sc.gov.br
+    active: true
+    source_type: report
+    signal_category: market
+    publisher: Prefeitura de Sao Jose
+    geographic_scope: neighborhood
+    cities:
+      - Sao Jose
+    urls:
+      - https://saojose.sc.gov.br/equipe-do-observatorio-imobiliario-de-sao-jose-recebe-mencao-honrosa-no-premio-tributare-2024/71165/
+  - code: ssp_sc_seguranca_numeros
+    name: SSP-SC Seguranca em Numeros
+    base_url: https://ssp.sc.gov.br
+    active: true
+    source_type: report
+    signal_category: crime
+    publisher: SSP-SC
+    geographic_scope: city
+    cities:
+      - Florianopolis
+      - Sao Jose
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://ssp.sc.gov.br/segurancaemnumeros/
+  - code: sao_jose_pmrr
+    name: Sao Jose PMRR
+    base_url: https://saojose.sc.gov.br
+    active: true
+    source_type: report
+    signal_category: flood_risk
+    publisher: Prefeitura de Sao Jose
+    geographic_scope: neighborhood
+    cities:
+      - Sao Jose
+    urls:
+      - https://saojose.sc.gov.br/prefeitura-de-sao-jose-e-ufsc-concluem-etapa-comunitaria-do-plano-municipal-de-reducao-de-riscos/89169/
+  - code: palhoca_enchentes
+    name: Palhoca Prevencao de Enchentes
+    base_url: https://palhoca.atende.net
+    active: true
+    source_type: report
+    signal_category: flood_risk
+    publisher: Prefeitura de Palhoca
+    geographic_scope: neighborhood
+    cities:
+      - Palhoca
+    urls:
+      - https://palhoca.atende.net/
+  - code: biguacu_reurb
+    name: Biguacu REURB Social
+    base_url: https://www.bigua.sc.gov.br
+    active: true
+    source_type: report
+    signal_category: regularization
+    publisher: Prefeitura de Biguacu
+    geographic_scope: neighborhood
+    cities:
+      - Biguacu
+    urls:
+      - https://www.bigua.sc.gov.br/noticia-745867/
+  - code: opendatasus_cnes
+    name: OpenDataSUS CNES
+    base_url: https://opendatasus.saude.gov.br
+    active: true
+    source_type: api
+    signal_category: health_access
+    publisher: Ministerio da Saude
+    parser: flat_json_metrics
+    geographic_scope: city
+    cities:
+      - Florianopolis
+      - Sao Jose
+      - Biguacu
+      - Palhoca
+    urls:
+      - https://opendatasus.saude.gov.br/

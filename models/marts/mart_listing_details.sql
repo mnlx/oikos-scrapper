@@ -1,10 +1,16 @@
 with roots as (
   select
-    i.ingestion_id,
+    i.id as ingestion_id,
     i.offering_hash,
     i.depth as root_depth
-  from {{ ref('raw_listing_ingestions') }} as i
+  from {{ source('app', 'raw_listing_ingestions') }} as i
   where i.depth = 0
+),
+source_lookup as (
+  select
+    id as source_id,
+    name as source_name
+  from {{ source('app', 'sources') }}
 ),
 crawl_summary as (
   select
@@ -12,13 +18,13 @@ crawl_summary as (
     source_code,
     max(depth) as max_depth_crawled,
     count(*) as crawled_pages
-  from {{ ref('raw_listing_ingestions') }}
+  from {{ source('app', 'raw_listing_ingestions') }}
   group by 1, 2
 )
 select
   b.offering_hash,
   b.source_code,
-  b.source_name,
+  coalesce(sl.source_name, b.source_code) as source_name,
   b.external_id,
   b.canonical_url,
   b.title,
@@ -30,6 +36,12 @@ select
   b.address,
   b.latitude,
   b.longitude,
+  b.geocode_provider,
+  b.geocode_query,
+  b.geocode_confidence,
+  b.geocode_status,
+  b.geocode_payload,
+  b.geocoded_at,
   b.price_sale,
   b.price_rent,
   b.condo_fee,
@@ -41,6 +53,8 @@ select
   b.description,
   b.broker_name,
   b.published_at,
+  b.listing_created_at,
+  b.listing_updated_at,
   coalesce(m.image_uris, b.image_uris, '[]'::jsonb) as image_uris,
   b.asset_links,
   b.screenshot_uri,
@@ -51,9 +65,11 @@ select
   coalesce(cs.crawled_pages, 1) as crawled_pages,
   b.raw_payload,
   b.parsed_at
-from {{ ref('raw_listings') }} as b
+from {{ source('app', 'raw_listings') }} as b
 left join {{ ref('int_listing_media') }} as m
   on b.ingestion_id = m.ingestion_id
+left join source_lookup as sl
+  on b.source_id = sl.source_id
 left join roots
   on b.ingestion_id = roots.ingestion_id
 left join crawl_summary as cs

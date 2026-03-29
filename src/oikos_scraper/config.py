@@ -11,6 +11,7 @@ class SourceDefinition(BaseModel):
     name: str
     base_url: str
     active: bool = True
+    block: bool = False
     group: str = "agency"
     preferred_strategy: str = "embedded_data"
     signal_category: str | None = None

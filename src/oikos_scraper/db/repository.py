@@ -6,7 +6,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from oikos_scraper.config import SourceDefinition
 from oikos_scraper.db.models import (
@@ -86,6 +86,7 @@ def ensure_sources(session: Session, sources: list[SourceDefinition]) -> dict[st
                 name=definition.name,
                 base_url=definition.base_url,
                 active=definition.active,
+                block=definition.block,
             )
             session.add(source)
             existing[definition.code] = source
@@ -93,6 +94,7 @@ def ensure_sources(session: Session, sources: list[SourceDefinition]) -> dict[st
             source.name = definition.name
             source.base_url = definition.base_url
             source.active = definition.active
+            source.block = definition.block
     session.commit()
     return existing
 
@@ -335,12 +337,28 @@ def list_listings_for_geocode_enrichment(
     source_codes: list[str] | None = None,
     limit: int = 200,
 ) -> list[BronzeListing]:
-    statement = select(BronzeListing).where(
-        BronzeListing.latitude.is_(None),
-        BronzeListing.longitude.is_(None),
-        BronzeListing.geocoded_at.is_(None),
-        BronzeListing.address.is_not(None),
-        BronzeListing.city.is_not(None),
+    statement = (
+        select(BronzeListing)
+        .options(
+            load_only(
+                BronzeListing.id,
+                BronzeListing.source_code,
+                BronzeListing.address,
+                BronzeListing.neighborhood,
+                BronzeListing.city,
+                BronzeListing.state,
+                BronzeListing.latitude,
+                BronzeListing.longitude,
+                BronzeListing.geocoded_at,
+            )
+        )
+        .where(
+            BronzeListing.latitude.is_(None),
+            BronzeListing.longitude.is_(None),
+            BronzeListing.geocoded_at.is_(None),
+            BronzeListing.address.is_not(None),
+            BronzeListing.city.is_not(None),
+        )
     )
     if source_codes:
         statement = statement.where(BronzeListing.source_code.in_(source_codes))

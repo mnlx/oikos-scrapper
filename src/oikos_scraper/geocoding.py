@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
@@ -43,10 +43,10 @@ class NominatimGeocoder:
     rate_limit_seconds: float = 1.1
     provider: str = "nominatim"
     country: str = "Brazil"
+    _last_request_started_at: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
         self.endpoint = self.endpoint.rstrip("/")
-        self._last_request_started_at = 0.0
 
     def _respect_rate_limit(self) -> None:
         elapsed = time.monotonic() - self._last_request_started_at

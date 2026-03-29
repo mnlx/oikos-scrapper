@@ -5,53 +5,58 @@ sources:
     schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'public') }}"
     tables:
       - name: raw_listings
+        columns:
+          - name: ingestion_id
+            tests: [not_null, unique]
+          - name: offering_hash
+            tests: [not_null]
+          - name: canonical_url
+            tests: [not_null]
+          - name: transaction_type
+            tests:
+              - accepted_values:
+                  arguments:
+                    values: ["sale", "rent"]
+          - name: property_type
+            tests:
+              - accepted_values:
+                  arguments:
+                    values: ["house", "apartment"]
       - name: raw_listing_assets
+        columns:
+          - name: id
+            tests: [not_null, unique]
+          - name: asset_uri
+            tests: [not_null]
+          - name: is_scrapped
+            tests: [not_null]
       - name: raw_listing_artifacts
       - name: raw_listing_ingestions
-      - name: neighborhood_files
+        columns:
+          - name: id
+            tests: [not_null, unique]
+          - name: page_url
+            tests: [not_null]
+          - name: depth
+            tests: [not_null]
+          - name: asset_links
+            tests: [not_null]
+      - name: raw_neighborhood_files
+        columns:
+          - name: source_url
+            tests: [not_null]
+          - name: source_code
+            tests: [not_null]
+      - name: raw_neighborhood_artifacts
+        columns:
+          - name: asset_url
+            tests: [not_null]
+          - name: asset_uri
+            tests: [not_null]
       - name: neighborhood_signals
       - name: sources
 
 models:
-  - name: raw_listings
-    columns:
-      - name: ingestion_id
-        tests: [not_null, unique]
-      - name: offering_hash
-        tests: [not_null]
-      - name: canonical_url
-        tests: [not_null]
-      - name: transaction_type
-        tests:
-          - accepted_values:
-              arguments:
-                values: ["sale", "rent"]
-      - name: property_type
-        tests:
-          - accepted_values:
-              arguments:
-                values: ["house", "apartment"]
-
-  - name: raw_listing_ingestions
-    columns:
-      - name: ingestion_id
-        tests: [not_null, unique]
-      - name: page_url
-        tests: [not_null]
-      - name: depth
-        tests: [not_null]
-      - name: asset_links
-        tests: [not_null]
-
-  - name: raw_listing_assets
-    columns:
-      - name: raw_listing_asset_id
-        tests: [not_null, unique]
-      - name: asset_uri
-        tests: [not_null]
-      - name: is_scrapped
-        tests: [not_null]
-
   - name: mart_listing_details
     columns:
       - name: offering_hash
@@ -66,13 +71,6 @@ models:
       - name: offering_hash
         tests: [not_null]
       - name: media_uri
-        tests: [not_null]
-
-  - name: raw_neighborhood_files
-    columns:
-      - name: source_url
-        tests: [not_null]
-      - name: source_code
         tests: [not_null]
 
   - name: mart_neighborhood_files

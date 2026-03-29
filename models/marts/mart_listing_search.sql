@@ -13,6 +13,10 @@ select
   address,
   latitude,
   longitude,
+  geocode_provider,
+  geocode_confidence,
+  geocode_status,
+  geocoded_at,
   coalesce(price_sale, price_rent) as price_display,
   price_sale,
   price_rent,
@@ -22,6 +26,8 @@ select
   area_m2,
   broker_name,
   published_at,
+  listing_created_at,
+  listing_updated_at,
   image_uris ->> 0 as primary_image_uri,
   screenshot_uri
 from {{ ref('mart_listing_details') }}

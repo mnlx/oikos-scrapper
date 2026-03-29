@@ -7,11 +7,13 @@ The repo is organized by bot:
 - `bots/realestate-listings`: listing discovery config and docs
 - `bots/neighborhood-signal`: public-signal config and docs
 
-The listings pipeline is split into three phases:
+The listings pipeline is split into phases:
 
-1. `ingest`: discovers listings with the current `httpx -> playwright -> selenium` fallback chain, recursively follows same-host links up to depth `5`, and stores raw HTML, screenshots, metadata, and downloaded listing images in MinIO under `s3://datalake/bronze/ingestion/listings/...`.
-2. `parse`: reads bronze artifacts back from MinIO, parses them into the `raw_listings` table, and can optionally run the DBT `raw_`/`int_` layer.
-3. `publish`: runs the DBT gold/API models so the frontend or API can read pre-grouped tables.
+1. `ingest`: discovers listings with the current `httpx -> playwright -> selenium` fallback chain, recursively follows same-host links up to depth `5`, and stores raw HTML, screenshots, and metadata in MinIO under `s3://datalake/bronze/ingestion/listings/...`.
+2. `enriching-assets`: expands `asset_links`, downloads assets into MinIO, and writes the `raw_listing_assets` table.
+3. `parse`: reads bronze artifacts back from MinIO, parses them into the `raw_listings` table, and can optionally run the DBT `raw_`/`int_` layer.
+4. `enrich-geocodes`: forward-geocodes parsed listing addresses into `raw_listings.latitude` and `raw_listings.longitude`.
+5. `publish`: runs the DBT gold/API models so the frontend or API can read pre-grouped tables.
 
 The neighborhood-signal bot follows the same raw-first pattern:
 
@@ -25,7 +27,9 @@ The neighborhood-signal bot follows the same raw-first pattern:
 python -m oikos_scraper.cli migrate
 python -m oikos_scraper.cli scrape --config config/sources.yaml
 python -m oikos_scraper.cli ingest --config config/sources.yaml
+python -m oikos_scraper.cli enriching-assets --config config/sources.yaml
 python -m oikos_scraper.cli parse --config config/sources.yaml --run-dbt
+python -m oikos_scraper.cli enrich-geocodes --config config/sources.yaml --limit 200
 python -m oikos_scraper.cli publish --select tag:gold
 python -m oikos_scraper.cli scrape-source --source olx --config config/sources.yaml
 python -m oikos_scraper.cli benchmark-source --source vivareal --config config/sources.yaml
@@ -61,6 +65,12 @@ OIKOS_BRONZE_S3_SECRET_KEY=change-me
 OIKOS_BRONZE_S3_BUCKET=datalake
 OIKOS_BRONZE_S3_SECURE=false
 OIKOS_ENABLE_SCREENSHOTS=true
+OIKOS_GEOCODE_ENDPOINT=https://nominatim.openstreetmap.org
+OIKOS_GEOCODE_PROVIDER=nominatim
+OIKOS_GEOCODE_COUNTRY=Brazil
+OIKOS_GEOCODE_ACCEPT_LANGUAGE=pt-BR,pt;q=0.9,en;q=0.8
+OIKOS_GEOCODE_USER_AGENT=oikos-scrapper/1.0
+OIKOS_GEOCODE_RATE_LIMIT_SECONDS=1.1
 DBT_POSTGRES_HOST=localhost
 DBT_POSTGRES_PORT=5432
 DBT_POSTGRES_DB=app

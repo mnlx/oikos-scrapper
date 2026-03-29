@@ -4,8 +4,8 @@ with assets as (
     a.source_code,
     a.asset_type as media_type,
     a.asset_uri as media_uri
-  from {{ ref('raw_listing_assets') }} as a
-  join {{ ref('raw_listings') }} as l
+  from {{ source('app', 'raw_listing_assets') }} as a
+  join {{ source('app', 'raw_listings') }} as l
     on a.ingestion_id = l.ingestion_id
   where a.is_scrapped
 )

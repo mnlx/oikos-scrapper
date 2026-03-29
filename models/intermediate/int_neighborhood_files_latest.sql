@@ -1,5 +1,5 @@
 select distinct on (source_code, source_url)
-  neighborhood_file_id,
+  id as neighborhood_file_id,
   source_code,
   source_name,
   base_url,
@@ -26,5 +26,5 @@ select distinct on (source_code, source_url)
   metadata_json,
   collected_at,
   parsed_at
-from {{ ref('raw_neighborhood_files') }}
+from {{ source('app', 'raw_neighborhood_files') }}
 order by source_code, source_url, collected_at desc, neighborhood_file_id desc

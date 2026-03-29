@@ -20,6 +20,7 @@ class Source(Base):
     name: Mapped[str] = mapped_column(String(255))
     base_url: Mapped[str] = mapped_column(String(500))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    block: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ScrapeRun(Base):
