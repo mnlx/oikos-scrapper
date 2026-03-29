@@ -35,6 +35,7 @@ from oikos_scraper.db.repository import (
     upsert_llm_enrichment,
 )
 from oikos_scraper.geocoding import NominatimGeocoder, build_listing_geocode_query
+from oikos_scraper.ingest_cache import RedisError, build_ingest_cache
 from oikos_scraper.db.session import create_session_factory
 from oikos_scraper.heuristics import ASSET_SUFFIXES, extract_asset_links, extract_follow_links, extract_image_urls, extract_text_blocks, find_price_candidates
 from oikos_scraper.normalizer import normalize_listing
@@ -87,6 +88,7 @@ class IngestionSummary:
     items_seen: int
     ingestions_upserted: int
     artifacts_created: int
+    cached_skips: int
     error_count: int
 
 
@@ -138,6 +140,7 @@ class ScrapeRunner:
         self.session_factory = None
         self.selenium_remote_url = get_setting("OIKOS_SELENIUM_REMOTE_URL")
         self.object_store = build_bronze_object_store()
+        self.ingest_cache = build_ingest_cache()
         self.max_images_per_listing = int(get_setting("OIKOS_MAX_IMAGES_PER_LISTING", "10") or "10")
         self.max_crawl_depth = int(get_setting("OIKOS_MAX_CRAWL_DEPTH", "5") or "5")
         self.max_links_per_page = int(get_setting("OIKOS_MAX_LINKS_PER_PAGE", "25") or "25")
@@ -552,62 +555,135 @@ class ScrapeRunner:
 
     def ingest_source(self, source: SourceDefinition, source_record, trigger_type: str) -> IngestionSummary:
         strategy_sequence = self._strategy_sequence(source.preferred_strategy)
+        strategy_name = strategy_sequence[0]
+        artifacts_created = 0
+        ingestions_upserted = 0
+        cached_skips = 0
         with self._session_factory()() as session:
             run = create_scrape_run(session, source.code, trigger_type, strategy_sequence[0], pipeline_stage="ingest")
 
         try:
             strategy_name, listings, _ = self._discover_with_fallbacks(source)
-            artifacts_created = 0
-            ingestions_upserted = 0
             with self._http_client() as client:
                 for listing in listings:
-                    pages = self._crawl_listing_pages(client=client, source=source, listing=listing)
-                    seed_url = str(listing.raw_payload.get("seed_url") or source.urls[0])
-                    aggregated_asset_links = self._dedupe_links(
-                        [asset_link for page in pages for asset_link in page.asset_links]
-                    )
-                    for page in pages:
-                        bundle = self._store_bundle(
-                            client=client,
-                            source=source,
-                            listing=listing,
-                            page=page,
-                            strategy_name=strategy_name,
+                    listing_reserved = False
+                    listing_ingested = False
+                    try:
+                        listing_reserved = self.ingest_cache.reserve_listing(source.code, listing.external_id)
+                    except RedisError as exc:
+                        LOGGER.warning(
+                            "ingest_cache_failed_open",
+                            source=source.code,
+                            external_id=listing.external_id,
+                            error=str(exc),
                         )
-                        with self._session_factory()() as session:
-                            ingestion = upsert_listing_ingestion(
-                                session,
-                                scrape_run=run,
-                                source=source_record,
-                                listing=listing,
-                                page_url=page.page_url,
-                                seed_url=seed_url,
-                                parent_page_url=page.parent_page_url,
-                                depth=page.depth,
-                                strategy=strategy_name,
-                                image_urls=page.image_urls,
-                                asset_links=aggregated_asset_links if page.depth == 0 else page.asset_links,
-                                screenshot_uri=bundle.screenshot.object_uri if bundle.screenshot is not None else None,
-                                ingestion_payload={
-                                    **listing.raw_payload,
-                                    "title": listing.title,
-                                    "canonical_url": listing.canonical_url,
-                                    "page_url": page.page_url,
-                                    "parent_page_url": page.parent_page_url,
-                                    "depth": page.depth,
-                                    "discovered_links": page.link_urls,
-                                    "asset_links": aggregated_asset_links if page.depth == 0 else page.asset_links,
-                                },
-                            )
-                            replace_listing_artifacts(
-                                session,
-                                ingestion=ingestion,
-                                bundle=bundle,
-                            )
-                        ingestions_upserted += 1
-                        artifacts_created += sum(
-                            1 for item in (bundle.html, bundle.screenshot, bundle.metadata) if item is not None
+                        listing_reserved = True
+                    if not listing_reserved:
+                        cached_skips += 1
+                        LOGGER.info("ingest_cache_listing_hit", source=source.code, external_id=listing.external_id)
+                        continue
+                    LOGGER.info("ingest_cache_listing_miss", source=source.code, external_id=listing.external_id)
+                    try:
+                        pages = self._crawl_listing_pages(client=client, source=source, listing=listing)
+                        seed_url = str(listing.raw_payload.get("seed_url") or source.urls[0])
+                        aggregated_asset_links = self._dedupe_links(
+                            [asset_link for page in pages for asset_link in page.asset_links]
                         )
+                        for page in pages:
+                            reserved = False
+                            try:
+                                reserved = self.ingest_cache.reserve_page(source.code, page.page_url)
+                            except RedisError as exc:
+                                LOGGER.warning(
+                                    "ingest_cache_failed_open",
+                                    source=source.code,
+                                    page_url=page.page_url,
+                                    error=str(exc),
+                                )
+                                reserved = True
+                            if not reserved:
+                                cached_skips += 1
+                                LOGGER.info("ingest_cache_page_hit", source=source.code, page_url=page.page_url)
+                                continue
+                            LOGGER.info("ingest_cache_page_miss", source=source.code, page_url=page.page_url)
+                            try:
+                                bundle = self._store_bundle(
+                                    client=client,
+                                    source=source,
+                                    listing=listing,
+                                    page=page,
+                                    strategy_name=strategy_name,
+                                )
+                            except Exception:
+                                try:
+                                    self.ingest_cache.release_page(source.code, page.page_url)
+                                except RedisError as exc:
+                                    LOGGER.warning(
+                                        "ingest_cache_release_failed",
+                                        source=source.code,
+                                        page_url=page.page_url,
+                                        error=str(exc),
+                                    )
+                                raise
+                            with self._session_factory()() as session:
+                                try:
+                                    ingestion = upsert_listing_ingestion(
+                                        session,
+                                        scrape_run=run,
+                                        source=source_record,
+                                        listing=listing,
+                                        page_url=page.page_url,
+                                        seed_url=seed_url,
+                                        parent_page_url=page.parent_page_url,
+                                        depth=page.depth,
+                                        strategy=strategy_name,
+                                        image_urls=page.image_urls,
+                                        asset_links=aggregated_asset_links if page.depth == 0 else page.asset_links,
+                                        screenshot_uri=bundle.screenshot.object_uri if bundle.screenshot is not None else None,
+                                        ingestion_payload={
+                                            **listing.raw_payload,
+                                            "title": listing.title,
+                                            "canonical_url": listing.canonical_url,
+                                            "page_url": page.page_url,
+                                            "parent_page_url": page.parent_page_url,
+                                            "depth": page.depth,
+                                            "discovered_links": page.link_urls,
+                                            "asset_links": aggregated_asset_links if page.depth == 0 else page.asset_links,
+                                        },
+                                    )
+                                    replace_listing_artifacts(
+                                        session,
+                                        ingestion=ingestion,
+                                        bundle=bundle,
+                                    )
+                                except Exception:
+                                    try:
+                                        self.ingest_cache.release_page(source.code, page.page_url)
+                                    except RedisError as exc:
+                                        LOGGER.warning(
+                                            "ingest_cache_release_failed",
+                                            source=source.code,
+                                            page_url=page.page_url,
+                                            error=str(exc),
+                                        )
+                                    raise
+                            listing_ingested = True
+                            ingestions_upserted += 1
+                            artifacts_created += sum(
+                                1 for item in (bundle.html, bundle.screenshot, bundle.metadata) if item is not None
+                            )
+                    except Exception:
+                        if not listing_ingested:
+                            try:
+                                self.ingest_cache.release_listing(source.code, listing.external_id)
+                            except RedisError as exc:
+                                LOGGER.warning(
+                                    "ingest_cache_release_failed",
+                                    source=source.code,
+                                    external_id=listing.external_id,
+                                    error=str(exc),
+                                )
+                        raise
 
             with self._session_factory()() as session:
                 complete_scrape_run(
@@ -625,6 +701,7 @@ class ScrapeRunner:
                 items_seen=len(listings),
                 ingestions_upserted=ingestions_upserted,
                 artifacts_created=artifacts_created,
+                cached_skips=cached_skips,
                 error_count=0,
             )
         except Exception as exc:
@@ -642,10 +719,11 @@ class ScrapeRunner:
             LOGGER.exception("ingest_failed", source=source.code)
             return IngestionSummary(
                 source_code=source.code,
-                strategy=strategy_sequence[0],
+                strategy=strategy_name,
                 items_seen=0,
-                ingestions_upserted=0,
-                artifacts_created=0,
+                ingestions_upserted=ingestions_upserted,
+                artifacts_created=artifacts_created,
+                cached_skips=cached_skips,
                 error_count=1,
             )
 

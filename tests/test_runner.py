@@ -3,7 +3,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 from oikos_scraper.config import AppConfig, SourceDefinition
+from oikos_scraper.ingest_cache import NullIngestCache, RedisError, normalize_page_url
+from oikos_scraper.normalizer import normalize_listing
 from oikos_scraper.runner import ScrapeRunner
+from oikos_scraper.strategies.static_html import extract_listing_from_detail
 from oikos_scraper.types import ListingDraft, StrategyResult
 
 
@@ -34,7 +37,45 @@ def build_runner() -> ScrapeRunner:
     config = AppConfig(cities=[], property_types=[], transaction_types=[], sources=[source])
     runner = ScrapeRunner(config, database_url="sqlite://")
     runner.session_factory = dummy_session
+    runner.ingest_cache = NullIngestCache()
     return runner
+
+
+class FakeIngestCache:
+    def __init__(
+        self,
+        listing_reserve_outcomes: list[bool] | None = None,
+        page_reserve_outcomes: list[bool] | None = None,
+    ) -> None:
+        self.listing_reserve_outcomes = list(listing_reserve_outcomes or [])
+        self.page_reserve_outcomes = list(page_reserve_outcomes or [])
+        self.listing_reserve_calls: list[tuple[str, str]] = []
+        self.page_reserve_calls: list[tuple[str, str]] = []
+        self.listing_release_calls: list[tuple[str, str]] = []
+        self.page_release_calls: list[tuple[str, str]] = []
+
+    def reserve_listing(self, source_code: str, external_id: str) -> bool:
+        self.listing_reserve_calls.append((source_code, external_id))
+        if self.listing_reserve_outcomes:
+            return self.listing_reserve_outcomes.pop(0)
+        return True
+
+    def reserve_page(self, source_code: str, page_url: str) -> bool:
+        self.page_reserve_calls.append((source_code, page_url))
+        if self.page_reserve_outcomes:
+            return self.page_reserve_outcomes.pop(0)
+        return True
+
+    def release_listing(self, source_code: str, external_id: str) -> None:
+        self.listing_release_calls.append((source_code, external_id))
+
+    def release_page(self, source_code: str, page_url: str) -> None:
+        self.page_release_calls.append((source_code, page_url))
+
+
+class FailingIngestCache(FakeIngestCache):
+    def reserve_listing(self, source_code: str, external_id: str) -> bool:
+        raise RedisError("cache unavailable")
 
 
 def test_runner_falls_back_to_browser(monkeypatch) -> None:
@@ -207,3 +248,232 @@ def test_crawl_listing_pages_collects_asset_links(monkeypatch) -> None:
         "https://example.com/folder/brochure.pdf",
     ]
     assert pages[0].link_urls == ["https://example.com/next"]
+
+
+def test_normalize_listing_extracts_created_and_updated_dates() -> None:
+    source = build_runner().config.find_source("test")
+    listing = normalize_listing(
+        source,
+        {
+            "id": "abc",
+            "url": "https://example.com/abc",
+            "title": "Casa com patio",
+            "city": "Florianopolis",
+            "createdAt": "2026-03-20T10:15:00Z",
+            "updated_at": "2026-03-21T13:45:00+00:00",
+            "published_at": "2026-03-19T08:00:00Z",
+        },
+        "https://example.com",
+    )
+
+    assert listing is not None
+    assert listing.published_at == "2026-03-19T08:00:00+00:00"
+    assert listing.listing_created_at == "2026-03-20T10:15:00+00:00"
+    assert listing.listing_updated_at == "2026-03-21T13:45:00+00:00"
+
+
+def test_extract_listing_from_detail_reads_html_dates() -> None:
+    source = build_runner().config.find_source("test")
+    listing = extract_listing_from_detail(
+        source,
+        """
+        <html>
+          <head>
+            <meta property="article:published_time" content="2026-03-18T09:00:00Z" />
+            <meta property="article:modified_time" content="2026-03-20T11:30:00Z" />
+          </head>
+          <body>
+            <h1>Casa perto da praia</h1>
+            <div class="address">Rua das Palmeiras, 10</div>
+          </body>
+        </html>
+        """,
+        "https://example.com/imovel/1",
+        "https://example.com",
+    )
+
+    assert listing is not None
+    assert listing.published_at == "2026-03-18T09:00:00+00:00"
+    assert listing.listing_created_at == "2026-03-18T09:00:00+00:00"
+    assert listing.listing_updated_at == "2026-03-20T11:30:00+00:00"
+
+
+def test_ingest_source_skips_cached_pages(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    listing = ListingDraft(
+        source_code="test",
+        external_id="test:cache",
+        canonical_url="https://example.com/1",
+        title="Cached",
+        description=None,
+        transaction_type="sale",
+        property_type="house",
+        city="Florianopolis",
+        state="SC",
+        raw_payload={},
+    )
+    runner.ingest_cache = FakeIngestCache(listing_reserve_outcomes=[False])
+
+    monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
+    monkeypatch.setattr(
+        runner,
+        "_crawl_listing_pages",
+        lambda client, source, listing: [type("Page", (), {
+            "page_url": "https://example.com/1",
+            "parent_page_url": None,
+            "depth": 0,
+            "image_urls": [],
+            "asset_links": [],
+            "link_urls": [],
+            "html": "<html></html>",
+        })()],
+    )
+    monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
+
+    def fail_store_bundle(**kwargs):  # noqa: ANN003
+        raise AssertionError("bundle should not be stored on cache hit")
+
+    monkeypatch.setattr(runner, "_store_bundle", fail_store_bundle)
+    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not upsert")))
+    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not replace artifacts")))
+
+    summary = runner.ingest_source(source, object(), trigger_type="manual")
+
+    assert summary.ingestions_upserted == 0
+    assert summary.cached_skips == 1
+    assert runner.ingest_cache.listing_reserve_calls == [("test", "test:cache")]
+
+
+def test_ingest_source_releases_cache_key_on_store_failure(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    listing = ListingDraft(
+        source_code="test",
+        external_id="test:fail",
+        canonical_url="https://example.com/2",
+        title="Failure",
+        description=None,
+        transaction_type="sale",
+        property_type="house",
+        city="Florianopolis",
+        state="SC",
+        raw_payload={},
+    )
+    cache = FakeIngestCache(listing_reserve_outcomes=[True], page_reserve_outcomes=[True])
+    runner.ingest_cache = cache
+
+    monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
+    monkeypatch.setattr(
+        runner,
+        "_crawl_listing_pages",
+        lambda client, source, listing: [type("Page", (), {
+            "page_url": "https://example.com/2",
+            "parent_page_url": None,
+            "depth": 0,
+            "image_urls": [],
+            "asset_links": [],
+            "link_urls": [],
+            "html": "<html></html>",
+        })()],
+    )
+    monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    summary = runner.ingest_source(source, object(), trigger_type="manual")
+
+    assert summary.error_count == 1
+    assert cache.page_release_calls == [("test", "https://example.com/2")]
+    assert cache.listing_release_calls == [("test", "test:fail")]
+
+
+def test_ingest_source_fails_open_when_cache_errors(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    listing = ListingDraft(
+        source_code="test",
+        external_id="test:open",
+        canonical_url="https://example.com/3",
+        title="Open",
+        description=None,
+        transaction_type="sale",
+        property_type="house",
+        city="Florianopolis",
+        state="SC",
+        raw_payload={},
+    )
+    runner.ingest_cache = FailingIngestCache()
+
+    page = type("Page", (), {
+        "page_url": "https://example.com/3",
+        "parent_page_url": None,
+        "depth": 0,
+        "image_urls": [],
+        "asset_links": [],
+        "link_urls": [],
+        "html": "<html></html>",
+    })()
+    bundle = type("Bundle", (), {"html": object(), "screenshot": None, "metadata": object()})()
+
+    monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
+    monkeypatch.setattr(runner, "_crawl_listing_pages", lambda client, source, listing: [page])
+    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: bundle)
+    monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: None)
+
+    summary = runner.ingest_source(source, object(), trigger_type="manual")
+
+    assert summary.ingestions_upserted == 1
+    assert summary.cached_skips == 0
+
+
+def test_ingest_source_skips_cached_page_after_listing_miss(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    listing = ListingDraft(
+        source_code="test",
+        external_id="test:page-cache",
+        canonical_url="https://example.com/4",
+        title="Page cache",
+        description=None,
+        transaction_type="sale",
+        property_type="house",
+        city="Florianopolis",
+        state="SC",
+        raw_payload={},
+    )
+    runner.ingest_cache = FakeIngestCache(listing_reserve_outcomes=[True], page_reserve_outcomes=[False])
+
+    monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
+    monkeypatch.setattr(
+        runner,
+        "_crawl_listing_pages",
+        lambda client, source, listing: [type("Page", (), {
+            "page_url": "https://example.com/4",
+            "parent_page_url": None,
+            "depth": 0,
+            "image_urls": [],
+            "asset_links": [],
+            "link_urls": [],
+            "html": "<html></html>",
+        })()],
+    )
+    monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: (_ for _ in ()).throw(AssertionError("bundle should not be stored on page cache hit")))
+    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not upsert")))
+    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not replace artifacts")))
+
+    summary = runner.ingest_source(source, object(), trigger_type="manual")
+
+    assert summary.ingestions_upserted == 0
+    assert summary.cached_skips == 1
+    assert runner.ingest_cache.page_reserve_calls == [("test", "https://example.com/4")]
+
+
+def test_normalize_page_url_canonicalizes_fragment_and_slash() -> None:
+    assert normalize_page_url("HTTPS://Example.com:443/apto/?a=1&b=2#top") == "https://example.com/apto?a=1&b=2"

@@ -20,6 +20,7 @@ dependencies = [
   "psycopg[binary]>=3.2.6",
   "pydantic>=2.10.6",
   "pyyaml>=6.0.2",
+  "redis>=6.4.0",
   "selectolax>=0.3.28",
   "selenium>=4.33.0",
   "sqlalchemy>=2.0.39",
