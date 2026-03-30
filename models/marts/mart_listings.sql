@@ -46,4 +46,4 @@ select
   d.last_seen_at,
   d.last_scraped_at,
   d.is_active
-from {{ ref('int_listings_deduped') }} as d
+from {{ ref('int_listings_enriched') }} as d
