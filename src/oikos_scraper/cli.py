@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     publish = subparsers.add_parser("publish")
     publish.add_argument("--select", default="tag:gold")
+    publish.add_argument("--config", default=source_config_default)
 
     scrape_source = subparsers.add_parser("scrape-source")
     scrape_source.add_argument("--config", default=source_config_default)
@@ -84,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     neighborhood_publish = subparsers.add_parser("neighborhood-publish")
     neighborhood_publish.add_argument("--select", default="mart_neighborhood_signals mart_neighborhood_files")
+    neighborhood_publish.add_argument("--config", default=neighborhood_config_default)
 
     return parser
 
@@ -161,7 +163,7 @@ def main() -> None:
         return
 
     if args.command == "publish":
-        config = load_config(source_config_default)
+        config = load_config(args.config)
         runner = ScrapeRunner(config)
         result = runner.run_dbt_build(select=args.select)
         print(
@@ -222,7 +224,7 @@ def main() -> None:
         return
 
     if args.command == "neighborhood-publish":
-        runner = build_neighborhood_runner(neighborhood_config_default)
+        runner = build_neighborhood_runner(args.config)
         result = runner.run_dbt_build(select=args.select)
         print(
             json.dumps(
