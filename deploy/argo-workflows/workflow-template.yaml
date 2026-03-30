@@ -91,10 +91,10 @@ spec:
         resources:
           requests:
             cpu: 100m
-            memory: 256Mi
+            memory: 512Mi
           limits:
             cpu: "1"
-            memory: 1Gi
+            memory: 3Gi
     - name: run-publish
       container:
         image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion

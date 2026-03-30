@@ -490,7 +490,8 @@ def upsert_llm_enrichment(
 
 
 def list_ingestions(session: Session, source_codes: list[str] | None = None) -> list[ListingIngestion]:
-    statement = select(ListingIngestion)
+    already_parsed = select(BronzeListing.ingestion_id)
+    statement = select(ListingIngestion).where(ListingIngestion.id.not_in(already_parsed))
     if source_codes:
         statement = statement.where(ListingIngestion.source_code.in_(source_codes))
     statement = statement.where(ListingIngestion.depth == 0)
