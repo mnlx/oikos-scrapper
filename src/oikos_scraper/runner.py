@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections import deque
 from dataclasses import dataclass
@@ -20,15 +21,12 @@ from oikos_scraper.db.repository import (
     complete_scrape_run,
     create_scrape_run,
     ensure_sources,
-    list_artifacts_for_ingestion,
-    list_listings_for_geocode_enrichment,
     list_ingestions,
+    list_listings_for_geocode_enrichment,
     list_listings_for_llm_enrichment,
     list_listings_for_price_enrichment,
-    replace_listing_artifacts,
     update_listing_geocode,
     update_listing_price,
-    upsert_listing_asset,
     upsert_bronze_listing,
     upsert_listing_ingestion,
     upsert_listings,
@@ -37,17 +35,33 @@ from oikos_scraper.db.repository import (
 from oikos_scraper.geocoding import NominatimGeocoder, build_listing_geocode_query
 from oikos_scraper.ingest_cache import RedisError, build_ingest_cache
 from oikos_scraper.db.session import create_session_factory
-from oikos_scraper.heuristics import ASSET_SUFFIXES, extract_asset_links, extract_follow_links, extract_image_urls, extract_text_blocks, find_price_candidates
+from oikos_scraper.heuristics import extract_asset_links, extract_follow_links, extract_image_urls, extract_text_blocks, find_price_candidates
 from oikos_scraper.normalizer import normalize_listing
-from oikos_scraper.object_store import BronzePathSpec, build_bronze_object_store, offering_hash
+from oikos_scraper.object_store import offering_hash
 from oikos_scraper.settings import get_setting
 from oikos_scraper.strategies.browser import BrowserStrategy
 from oikos_scraper.strategies.embedded_data import EmbeddedDataStrategy
 from oikos_scraper.strategies.selenium_grid import SeleniumGridStrategy
 from oikos_scraper.strategies.static_html import StaticHTMLStrategy, enrich_listing_from_detail_html, extract_listing_from_detail
-from oikos_scraper.types import CrawledPage, ListingArtifactBundle, ListingDraft, ParsedListingRecord, StoredObject, StrategyResult
+from oikos_scraper.types import CrawledPage, ListingDraft, ParsedListingRecord, StrategyResult
 
 LOGGER = structlog.get_logger(__name__)
+
+_STRIP_HTML_TAGS = re.compile(r"<[^>]+>")
+_COLLAPSE_WHITESPACE = re.compile(r"\s+")
+
+
+def _extract_text_from_html(html: str) -> str | None:
+    """Strip HTML tags and return concatenated plain text, collapsing whitespace."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "meta", "link", "noscript", "head"]):
+        tag.decompose()
+    text = soup.get_text(separator=" ", strip=True)
+    text = _COLLAPSE_WHITESPACE.sub(" ", text).strip()
+    return text or None
+
 
 LLM_EXTRACTION_PROMPT = """Fill in this JSON with values extracted from the real estate listing below. Use the structured fields as hints and the description to fill in any gaps. Return numeric values without currency symbols. For latitude/longitude, only provide values if coordinates appear explicitly in the address or description — otherwise use null.
 
@@ -87,7 +101,6 @@ class IngestionSummary:
     strategy: str
     items_seen: int
     ingestions_upserted: int
-    artifacts_created: int
     cached_skips: int
     error_count: int
 
@@ -98,14 +111,6 @@ class ParseSummary:
     parsed_count: int
     error_count: int
 
-
-@dataclass(slots=True)
-class AssetEnrichmentSummary:
-    source_code: str
-    assets_seen: int
-    assets_scrapped: int
-    assets_reused: int
-    error_count: int
 
 
 @dataclass(slots=True)
@@ -139,18 +144,10 @@ class ScrapeRunner:
         self.database_url = database_url
         self.session_factory = None
         self.selenium_remote_url = get_setting("OIKOS_SELENIUM_REMOTE_URL")
-        self.object_store = build_bronze_object_store()
         self.ingest_cache = build_ingest_cache()
-        self.max_images_per_listing = int(get_setting("OIKOS_MAX_IMAGES_PER_LISTING", "10") or "10")
         self.max_crawl_depth = int(get_setting("OIKOS_MAX_CRAWL_DEPTH", "5") or "5")
         self.max_links_per_page = int(get_setting("OIKOS_MAX_LINKS_PER_PAGE", "25") or "25")
         self.max_pages_per_listing = int(get_setting("OIKOS_MAX_PAGES_PER_LISTING", "100") or "100")
-        self.enable_screenshots = (get_setting("OIKOS_ENABLE_SCREENSHOTS", "true") or "true").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
         self.strategies = {
             "static_html": StaticHTMLStrategy(),
             "embedded_data": EmbeddedDataStrategy(),
@@ -348,62 +345,6 @@ class ScrapeRunner:
             return html
         raise RuntimeError(f"unable to fetch page html for {url}: {last_error}")
 
-    def _playwright_screenshot(self, url: str) -> bytes | None:
-        if not self.enable_screenshots:
-            return None
-        try:
-            with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=True)
-                try:
-                    page = browser.new_page(viewport={"width": 1440, "height": 1200})
-                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                    try:
-                        page.wait_for_load_state("networkidle", timeout=5000)
-                    except PlaywrightTimeoutError:
-                        pass
-                    return page.screenshot(full_page=True, type="png")
-                finally:
-                    browser.close()
-        except Exception:
-            return None
-
-    def _selenium_screenshot(self, url: str) -> bytes | None:
-        if not self.enable_screenshots or not self.selenium_remote_url:
-            return None
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--no-sandbox")
-        driver = webdriver.Remote(command_executor=self.selenium_remote_url, options=options)
-        try:
-            driver.set_window_size(1440, 1400)
-            driver.get(url)
-            return driver.get_screenshot_as_png()
-        except Exception:
-            return None
-        finally:
-            driver.quit()
-
-    def _capture_screenshot(self, url: str) -> bytes | None:
-        return self._selenium_screenshot(url)
-
-    def _artifact_key(self, *, category: str, base_hash: str, extension: str, index: int | None = None) -> str:
-        return BronzePathSpec(
-            layer="bronze",
-            category=category,
-            run_at=datetime.now(UTC),
-            base_hash=base_hash,
-            extension=extension,
-            index=index,
-        ).object_key()
-
-    def _page_artifact_hash(self, listing: ListingDraft, page_url: str, depth: int) -> str:
-        base_hash = offering_hash(listing.source_code, listing.external_id)
-        if depth == 0 and page_url == listing.canonical_url:
-            return base_hash
-        page_hash = offering_hash(base_hash, page_url)[:12]
-        return f"{base_hash}-d{depth:02d}-{page_hash}"
-
     def _allowed_hosts(self, source: SourceDefinition, listing: ListingDraft) -> set[str]:
         hosts = {
             urlparse(source.base_url).netloc.lower(),
@@ -420,21 +361,6 @@ class ScrapeRunner:
             seen.add(value)
             deduped.append(value)
         return deduped
-
-    def _asset_type(self, asset_url: str, content_type: str | None = None) -> str:
-        lowered_type = (content_type or "").split(";", 1)[0].strip().lower()
-        if lowered_type.startswith("image/"):
-            return "image"
-        if lowered_type == "application/pdf":
-            return "pdf"
-        path = urlparse(asset_url).path.lower()
-        if any(path.endswith(ext) for ext in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tif", ".tiff", ".avif", ".heic"}):
-            return "image"
-        if path.endswith(".pdf"):
-            return "pdf"
-        if any(path.endswith(ext) for ext in ASSET_SUFFIXES):
-            return "asset"
-        return "asset"
 
     def _crawl_listing_pages(
         self,
@@ -478,68 +404,12 @@ class ScrapeRunner:
 
         return pages
 
-    def _store_bundle(
-        self,
-        *,
-        client: httpx.Client,
-        source: SourceDefinition,
-        listing: ListingDraft,
-        page: CrawledPage,
-        strategy_name: str,
-    ) -> ListingArtifactBundle:
-        if self.object_store is None:
-            raise RuntimeError("Bronze object store is not configured")
-        base_hash = self._page_artifact_hash(listing, page.page_url, page.depth)
-        html_object = self.object_store.put_text(
-            payload=page.html,
-            key=self._artifact_key(category="html", base_hash=base_hash, extension=".html"),
-            content_type="text/html; charset=utf-8",
-        )
-        metadata_payload = json.dumps(
-            {
-                "source_code": source.code,
-                "source_name": source.name,
-                "strategy": strategy_name,
-                "external_id": listing.external_id,
-                "canonical_url": listing.canonical_url,
-                "page_url": page.page_url,
-                "parent_page_url": page.parent_page_url,
-                "depth": page.depth,
-                "seed_urls": source.urls,
-                "discovered_links": page.link_urls,
-                "raw_payload": listing.raw_payload,
-            },
-            ensure_ascii=True,
-            default=str,
-            indent=2,
-        )
-        metadata_object = self.object_store.put_text(
-            payload=metadata_payload,
-            key=self._artifact_key(category="json", base_hash=base_hash, extension=".json"),
-            content_type="application/json",
-        )
-        screenshot_bytes = self._capture_screenshot(page.page_url)
-        screenshot_object: StoredObject | None = None
-        if screenshot_bytes is not None:
-            screenshot_object = self.object_store.put_bytes(
-                payload=screenshot_bytes,
-                key=self._artifact_key(category="screenshots", base_hash=base_hash, extension=".png"),
-                content_type="image/png",
-            )
-        return ListingArtifactBundle(
-            html=html_object,
-            screenshot=screenshot_object,
-            metadata=metadata_object,
-        )
-
     def ingest_sources(
         self,
         source_codes: list[str] | None = None,
         trigger_type: str = "scheduled",
         group: str | None = None,
     ) -> list[IngestionSummary]:
-        if self.object_store is None:
-            raise RuntimeError("Bronze object store is not configured")
         selected = (
             [self.config.find_source(code) for code in source_codes]
             if source_codes
@@ -556,7 +426,6 @@ class ScrapeRunner:
     def ingest_source(self, source: SourceDefinition, source_record, trigger_type: str) -> IngestionSummary:
         strategy_sequence = self._strategy_sequence(source.preferred_strategy)
         strategy_name = strategy_sequence[0]
-        artifacts_created = 0
         ingestions_upserted = 0
         cached_skips = 0
         with self._session_factory()() as session:
@@ -600,54 +469,34 @@ class ScrapeRunner:
                                     depth=page.depth,
                                 )
                                 continue
-                            try:
-                                bundle = self._store_bundle(
-                                    client=client,
-                                    source=source,
-                                    listing=listing,
-                                    page=page,
-                                    strategy_name=strategy_name,
-                                )
-                            except Exception:
-                                raise
                             with self._session_factory()() as session:
-                                try:
-                                    ingestion = upsert_listing_ingestion(
-                                        session,
-                                        scrape_run=run,
-                                        source=source_record,
-                                        listing=listing,
-                                        page_url=page.page_url,
-                                        seed_url=seed_url,
-                                        parent_page_url=page.parent_page_url,
-                                        depth=page.depth,
-                                        strategy=strategy_name,
-                                        image_urls=page.image_urls,
-                                        asset_links=aggregated_asset_links if page.depth == 0 else page.asset_links,
-                                        screenshot_uri=bundle.screenshot.object_uri if bundle.screenshot is not None else None,
-                                        ingestion_payload={
-                                            **listing.raw_payload,
-                                            "title": listing.title,
-                                            "canonical_url": listing.canonical_url,
-                                            "page_url": page.page_url,
-                                            "parent_page_url": page.parent_page_url,
-                                            "depth": page.depth,
-                                            "discovered_links": page.link_urls,
-                                            "asset_links": aggregated_asset_links if page.depth == 0 else page.asset_links,
-                                        },
-                                    )
-                                    replace_listing_artifacts(
-                                        session,
-                                        ingestion=ingestion,
-                                        bundle=bundle,
-                                    )
-                                except Exception:
-                                    raise
+                                ingestion = upsert_listing_ingestion(
+                                    session,
+                                    scrape_run=run,
+                                    source=source_record,
+                                    listing=listing,
+                                    page_url=page.page_url,
+                                    seed_url=seed_url,
+                                    parent_page_url=page.parent_page_url,
+                                    depth=page.depth,
+                                    strategy=strategy_name,
+                                    image_urls=page.image_urls,
+                                    asset_links=aggregated_asset_links if page.depth == 0 else page.asset_links,
+                                    screenshot_uri=None,
+                                    ingestion_payload={
+                                        **listing.raw_payload,
+                                        "title": listing.title,
+                                        "canonical_url": listing.canonical_url,
+                                        "page_url": page.page_url,
+                                        "parent_page_url": page.parent_page_url,
+                                        "depth": page.depth,
+                                        "discovered_links": page.link_urls,
+                                        "asset_links": aggregated_asset_links if page.depth == 0 else page.asset_links,
+                                        "raw_html": page.html,
+                                    },
+                                )
                             listing_ingested = True
                             ingestions_upserted += 1
-                            artifacts_created += sum(
-                                1 for item in (bundle.html, bundle.screenshot, bundle.metadata) if item is not None
-                            )
                     except Exception:
                         if not listing_ingested:
                             try:
@@ -676,7 +525,6 @@ class ScrapeRunner:
                 strategy=strategy_name,
                 items_seen=len(listings),
                 ingestions_upserted=ingestions_upserted,
-                artifacts_created=artifacts_created,
                 cached_skips=cached_skips,
                 error_count=0,
             )
@@ -698,125 +546,11 @@ class ScrapeRunner:
                 strategy=strategy_name,
                 items_seen=0,
                 ingestions_upserted=ingestions_upserted,
-                artifacts_created=artifacts_created,
                 cached_skips=cached_skips,
                 error_count=1,
             )
 
-    def enrich_assets_sources(self, source_codes: list[str] | None = None) -> list[AssetEnrichmentSummary]:
-        if self.object_store is None:
-            raise RuntimeError("Bronze object store is not configured")
-        selected = (
-            [self.config.find_source(code) for code in source_codes]
-            if source_codes
-            else self.config.active_sources()
-        )
-        with self._session_factory()() as session:
-            source_records = ensure_sources(session, selected)
-
-        summaries: list[AssetEnrichmentSummary] = []
-        for source in selected:
-            summaries.append(self.enrich_assets_source(source, source_records[source.code]))
-        return summaries
-
-    def enrich_assets_source(self, source: SourceDefinition, source_record) -> AssetEnrichmentSummary:
-        strategy_name = "asset_enrichment"
-        with self._session_factory()() as session:
-            run = create_scrape_run(session, source.code, "scheduled", strategy_name, pipeline_stage="enriching_assets")
-
-        assets_seen = 0
-        assets_scrapped = 0
-        assets_reused = 0
-        error_count = 0
-        try:
-            with self._session_factory()() as session:
-                ingestions = list_ingestions(session, source_codes=[source.code])
-            with self._http_client() as client:
-                for ingestion in ingestions:
-                    asset_links = self._dedupe_links(list(ingestion.asset_links or []))
-                    for asset_id, asset_url in enumerate(asset_links, start=1):
-                        assets_seen += 1
-                        default_extension = self.object_store.infer_extension(asset_url, "application/octet-stream")
-                        asset_hash = f"{ingestion.offering_hash}-asset-{asset_id:02d}"
-                        key = self._artifact_key(category="assets", base_hash=asset_hash, extension=default_extension)
-                        asset_uri = self.object_store.uri_for_key(key)
-                        is_scrapped = self.object_store.object_exists(key)
-                        stored: StoredObject | None = None
-                        if is_scrapped:
-                            assets_reused += 1
-                        else:
-                            try:
-                                stored = self.object_store.fetch_and_store(
-                                    client=client,
-                                    source_url=asset_url,
-                                    key=key,
-                                )
-                                asset_uri = stored.uri
-                                is_scrapped = True
-                                assets_scrapped += 1
-                            except Exception:
-                                error_count += 1
-                                LOGGER.exception(
-                                    "asset_enrichment_failed",
-                                    source_code=source.code,
-                                    external_id=ingestion.external_id,
-                                    asset_url=asset_url,
-                                )
-                        with self._session_factory()() as session:
-                            upsert_listing_asset(
-                                session,
-                                source=source_record,
-                                ingestion=ingestion,
-                                asset_id=asset_id,
-                                asset_type=self._asset_type(asset_url, stored.content_type if stored else None),
-                                asset_url=asset_url,
-                                asset_uri=asset_uri,
-                                is_scrapped=is_scrapped,
-                                content_type=stored.content_type if stored else None,
-                                checksum_sha256=stored.checksum_sha256 if stored else None,
-                                size_bytes=stored.size if stored else None,
-                            )
-            with self._session_factory()() as session:
-                complete_scrape_run(
-                    session,
-                    run,
-                    status="success",
-                    items_seen=assets_seen,
-                    items_inserted=assets_scrapped + assets_reused,
-                    items_updated=0,
-                    error_count=error_count,
-                )
-            return AssetEnrichmentSummary(
-                source_code=source.code,
-                assets_seen=assets_seen,
-                assets_scrapped=assets_scrapped,
-                assets_reused=assets_reused,
-                error_count=error_count,
-            )
-        except Exception as exc:
-            with self._session_factory()() as session:
-                complete_scrape_run(
-                    session,
-                    run,
-                    status="failed",
-                    items_seen=assets_seen,
-                    items_inserted=assets_scrapped + assets_reused,
-                    items_updated=0,
-                    error_count=error_count + 1,
-                    last_error=str(exc),
-                )
-            LOGGER.exception("enrich_assets_failed", source=source.code)
-            return AssetEnrichmentSummary(
-                source_code=source.code,
-                assets_seen=assets_seen,
-                assets_scrapped=assets_scrapped,
-                assets_reused=assets_reused,
-                error_count=error_count + 1,
-            )
-
     def parse_sources(self, source_codes: list[str] | None = None) -> list[ParseSummary]:
-        if self.object_store is None:
-            raise RuntimeError("Bronze object store is not configured")
         summaries: list[ParseSummary] = []
         with self._session_factory()() as session:
             ingestions = list_ingestions(session, source_codes=source_codes)
@@ -835,13 +569,8 @@ class ScrapeRunner:
             source_definition = self.config.find_source(source_code)
             for ingestion in rows:
                 try:
-                    with self._session_factory()() as session:
-                        artifacts = list_artifacts_for_ingestion(session, ingestion.id)
-                    by_type: dict[str, list] = {}
-                    for artifact in artifacts:
-                        by_type.setdefault(artifact.artifact_type, []).append(artifact)
-                    html_artifact = by_type.get("html", [None])[0]
-                    html = self.object_store.get_text(html_artifact.object_key) if html_artifact is not None else ""
+                    html = str(ingestion.ingestion_payload.get("raw_html") or "")
+                    text_html = _extract_text_from_html(html) if html else None
                     listing = extract_listing_from_detail(
                         source_definition,
                         html,
@@ -886,18 +615,11 @@ class ScrapeRunner:
                         listing_updated_at=listing.listing_updated_at,
                         image_uris=[],
                         asset_links=list(ingestion.asset_links or []),
-                        screenshot_uri=ingestion.screenshot_uri
-                        or (by_type.get("screenshot", [None])[0].object_uri if by_type.get("screenshot") else None),
-                        html_uri=html_artifact.object_uri if html_artifact is not None else None,
-                        metadata_uri=by_type.get("json", [None])[0].object_uri if by_type.get("json") else None,
-                        raw_payload={
-                            "ingestion_payload": ingestion.ingestion_payload,
-                            "listing_raw_payload": listing.raw_payload,
-                            "artifact_uris": {
-                                key: [item.object_uri for item in value]
-                                for key, value in by_type.items()
-                            },
-                        },
+                        screenshot_uri=ingestion.screenshot_uri,
+                        html_uri=None,
+                        metadata_uri=None,
+                        text_html=text_html,
+                        raw_payload={},
                         parsed_at=datetime.now(UTC),
                     )
                     with self._session_factory()() as session:

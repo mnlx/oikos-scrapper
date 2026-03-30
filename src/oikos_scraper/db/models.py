@@ -112,29 +112,11 @@ class ListingIngestion(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-class ListingArtifact(Base):
-    __tablename__ = "raw_listing_artifacts"
+
+class IntListingDeduped(Base):
+    __tablename__ = "int_listings_deduped"
     __table_args__ = (
-        UniqueConstraint("ingestion_id", "artifact_type", "object_key", name="uq_raw_listing_artifacts_ingestion_object"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    ingestion_id: Mapped[int] = mapped_column(ForeignKey("raw_listing_ingestions.id"))
-    artifact_type: Mapped[str] = mapped_column(String(30))
-    bucket: Mapped[str] = mapped_column(String(255))
-    object_key: Mapped[str] = mapped_column(String(1000))
-    object_uri: Mapped[str] = mapped_column(String(1200))
-    content_type: Mapped[str] = mapped_column(String(255))
-    checksum_sha256: Mapped[str] = mapped_column(String(64))
-    size_bytes: Mapped[int] = mapped_column(Integer)
-    source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-
-
-class BronzeListing(Base):
-    __tablename__ = "raw_listings"
-    __table_args__ = (
-        UniqueConstraint("source_id", "external_id", name="uq_raw_listings_source_external_id"),
+        UniqueConstraint("source_id", "external_id", name="uq_int_listings_deduped_source_external_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -171,41 +153,22 @@ class BronzeListing(Base):
     screenshot_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     html_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
     metadata_uri: Mapped[str | None] = mapped_column(String(1200), nullable=True)
+    text_html: Mapped[str | None] = mapped_column(Text, nullable=True)
     geocode_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     geocode_query: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     geocode_confidence: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
     geocode_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
     geocode_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     geocoded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    raw_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     parsed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     price_enriched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     price_enrichment_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
 
-class ListingAsset(Base):
-    __tablename__ = "raw_listing_assets"
-    __table_args__ = (
-        UniqueConstraint("source_id", "external_id", "asset_url", name="uq_raw_listing_assets_source_external_url"),
-        Index("ix_raw_listing_assets_source_external", "source_code", "external_id"),
-        Index("ix_raw_listing_assets_ingestion", "ingestion_id"),
-    )
+# Backward-compat alias — remove once all call sites are updated
+BronzeListing = IntListingDeduped
 
-    id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"))
-    ingestion_id: Mapped[int] = mapped_column(ForeignKey("raw_listing_ingestions.id"))
-    source_code: Mapped[str] = mapped_column(String(120))
-    external_id: Mapped[str] = mapped_column(String(255))
-    asset_id: Mapped[int] = mapped_column(Integer)
-    asset_type: Mapped[str] = mapped_column(String(50))
-    asset_url: Mapped[str] = mapped_column(String(1200))
-    asset_uri: Mapped[str] = mapped_column(String(1200))
-    content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    is_scrapped: Mapped[bool] = mapped_column(Boolean, default=False)
-    discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    scrapped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 
 
 class LlmEnrichment(Base):

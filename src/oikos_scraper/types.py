@@ -62,13 +62,6 @@ class StoredObject:
         return self.uri
 
 
-@dataclass(slots=True)
-class ListingArtifactBundle:
-    html: StoredObject | None = None
-    screenshot: StoredObject | None = None
-    metadata: StoredObject | None = None
-    images: list[StoredObject] = field(default_factory=list)
-
 
 @dataclass(slots=True)
 class CrawledPage:
@@ -114,6 +107,7 @@ class ParsedListingRecord:
     screenshot_uri: str | None
     html_uri: str | None
     metadata_uri: str | None
+    text_html: str | None = None
     raw_payload: dict[str, Any] = field(default_factory=dict)
     parsed_at: datetime | None = None
 

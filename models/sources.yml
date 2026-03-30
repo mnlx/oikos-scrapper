@@ -4,7 +4,7 @@ sources:
   - name: app
     schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'public') }}"
     tables:
-      - name: raw_listings
+      - name: int_listings_deduped
         columns:
           - name: ingestion_id
             tests: [not_null, unique]
@@ -22,15 +22,6 @@ sources:
               - accepted_values:
                   arguments:
                     values: ["house", "apartment"]
-      - name: raw_listing_assets
-        columns:
-          - name: id
-            tests: [not_null, unique]
-          - name: asset_uri
-            tests: [not_null]
-          - name: is_scrapped
-            tests: [not_null]
-      - name: raw_listing_artifacts
       - name: raw_listing_ingestions
         columns:
           - name: id
@@ -64,13 +55,6 @@ models:
       - name: canonical_url
         tests: [not_null]
       - name: source_code
-        tests: [not_null]
-
-  - name: mart_listing_media
-    columns:
-      - name: offering_hash
-        tests: [not_null]
-      - name: media_uri
         tests: [not_null]
 
   - name: mart_neighborhood_files

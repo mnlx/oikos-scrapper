@@ -46,10 +46,6 @@ def build_parser() -> argparse.ArgumentParser:
     parse.add_argument("--source", action="append", default=[])
     parse.add_argument("--run-dbt", action="store_true")
 
-    enrich_assets = subparsers.add_parser("enriching-assets")
-    enrich_assets.add_argument("--config", default=source_config_default)
-    enrich_assets.add_argument("--source", action="append", default=[])
-
     enrich_geocodes = subparsers.add_parser("enrich-geocodes")
     enrich_geocodes.add_argument("--config", default=source_config_default)
     enrich_geocodes.add_argument("--source", action="append", default=[])
@@ -85,10 +81,6 @@ def build_parser() -> argparse.ArgumentParser:
     neighborhood_parse = subparsers.add_parser("neighborhood-parse")
     neighborhood_parse.add_argument("--config", default=neighborhood_config_default)
     neighborhood_parse.add_argument("--source", action="append", default=[])
-
-    neighborhood_enrich_assets = subparsers.add_parser("neighborhood-enriching-assets")
-    neighborhood_enrich_assets.add_argument("--config", default=neighborhood_config_default)
-    neighborhood_enrich_assets.add_argument("--source", action="append", default=[])
 
     neighborhood_publish = subparsers.add_parser("neighborhood-publish")
     neighborhood_publish.add_argument("--select", default="mart_neighborhood_signals mart_neighborhood_files")
@@ -156,13 +148,6 @@ def main() -> None:
                 "stderr": dbt_result.stderr,
             }
         print(json.dumps(response, indent=2))
-        return
-
-    if args.command == "enriching-assets":
-        config = load_config(args.config)
-        runner = ScrapeRunner(config)
-        summaries = runner.enrich_assets_sources(args.source or None)
-        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 
     if args.command == "enrich-geocodes":
@@ -233,12 +218,6 @@ def main() -> None:
     if args.command == "neighborhood-parse":
         runner = build_neighborhood_runner(args.config)
         summaries = runner.parse_sources(args.source or None)
-        print(json.dumps([asdict(summary) for summary in summaries], indent=2))
-        return
-
-    if args.command == "neighborhood-enriching-assets":
-        runner = build_neighborhood_runner(args.config)
-        summaries = runner.enrich_assets_sources(args.source or None)
         print(json.dumps([asdict(summary) for summary in summaries], indent=2))
         return
 

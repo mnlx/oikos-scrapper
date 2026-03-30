@@ -18,28 +18,28 @@ spec:
   templates:
     - name: run-all
       steps:
+        # Ingest all groups in parallel
         - - name: ingest-agencies
             template: run-ingest
             arguments:
               parameters:
                 - name: group
                   value: agency
-        - - name: ingest-developers
+          - name: ingest-developers
             template: run-ingest
             arguments:
               parameters:
                 - name: group
                   value: developer
-        - - name: enrich-assets
-            template: run-enrich-assets
         - - name: parse-bronze
             template: run-parse
+        # Geocode and LLM enrichment are independent — run in parallel
         - - name: enrich-geocodes
             template: run-enrich-geocodes
+          - name: llm-enrich
+            template: run-llm-enrich
         - - name: publish-api
             template: run-publish
-        - - name: llm-enrich
-            template: run-llm-enrich
     - name: run-ingest
       inputs:
         parameters:
@@ -79,30 +79,6 @@ spec:
           - oikos
         args:
           - parse
-          - --config
-          - /etc/oikos/sources.yaml
-        envFrom:
-          - secretRef:
-              name: oikos-scrapper-env
-        volumeMounts:
-          - name: source-config
-            mountPath: /etc/oikos
-            readOnly: true
-        resources:
-          requests:
-            cpu: 100m
-            memory: 256Mi
-          limits:
-            cpu: "1"
-            memory: 1Gi
-    - name: run-enrich-assets
-      container:
-        image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion
-        imagePullPolicy: Always
-        command:
-          - oikos
-        args:
-          - enriching-assets
           - --config
           - /etc/oikos/sources.yaml
         envFrom:

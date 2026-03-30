@@ -332,12 +332,7 @@ def test_ingest_source_skips_cached_pages(monkeypatch) -> None:
     monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
     monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
 
-    def fail_store_bundle(**kwargs):  # noqa: ANN003
-        raise AssertionError("bundle should not be stored on cache hit")
-
-    monkeypatch.setattr(runner, "_store_bundle", fail_store_bundle)
     monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not upsert")))
-    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not replace artifacts")))
 
     summary = runner.ingest_source(source, object(), trigger_type="manual")
 
@@ -380,7 +375,7 @@ def test_ingest_source_releases_cache_key_on_store_failure(monkeypatch) -> None:
     )
     monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
     monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
 
     summary = runner.ingest_source(source, object(), trigger_type="manual")
 
@@ -414,15 +409,13 @@ def test_ingest_source_fails_open_when_cache_errors(monkeypatch) -> None:
         "link_urls": [],
         "html": "<html></html>",
     })()
-    bundle = type("Bundle", (), {"html": object(), "screenshot": None, "metadata": object()})()
+
 
     monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
     monkeypatch.setattr(runner, "_crawl_listing_pages", lambda client, source, listing: [page])
-    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: bundle)
     monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
     monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
     monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: object())
-    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: None)
 
     summary = runner.ingest_source(source, object(), trigger_type="manual")
 
@@ -446,7 +439,7 @@ def test_ingest_source_writes_without_page_cache_gate(monkeypatch) -> None:
         raw_payload={},
     )
     runner.ingest_cache = FakeIngestCache(listing_reserve_outcomes=[True])
-    bundle = type("Bundle", (), {"html": object(), "screenshot": None, "metadata": object()})()
+
 
     monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
     monkeypatch.setattr(
@@ -464,9 +457,7 @@ def test_ingest_source_writes_without_page_cache_gate(monkeypatch) -> None:
     )
     monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
     monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
-    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: bundle)
     monkeypatch.setattr("oikos_scraper.runner.upsert_listing_ingestion", lambda *args, **kwargs: object())
-    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: None)
 
     summary = runner.ingest_source(source, object(), trigger_type="manual")
 
@@ -511,19 +502,17 @@ def test_ingest_source_skips_follow_pages(monkeypatch) -> None:
         "link_urls": [],
         "html": "<html></html>",
     })()
-    bundle = type("Bundle", (), {"html": object(), "screenshot": None, "metadata": object()})()
+
     upsert_calls: list[dict] = []
 
     monkeypatch.setattr(runner, "_discover_with_fallbacks", lambda source: ("static_html", [listing], {}))
     monkeypatch.setattr(runner, "_crawl_listing_pages", lambda client, source, listing: [root_page, child_page])
-    monkeypatch.setattr(runner, "_store_bundle", lambda **kwargs: bundle)
     monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
     monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "oikos_scraper.runner.upsert_listing_ingestion",
         lambda *args, **kwargs: upsert_calls.append(kwargs) or object(),
     )
-    monkeypatch.setattr("oikos_scraper.runner.replace_listing_artifacts", lambda *args, **kwargs: None)
 
     summary = runner.ingest_source(source, object(), trigger_type="manual")
 
@@ -539,3 +528,171 @@ def test_ingest_source_skips_follow_pages(monkeypatch) -> None:
 
 def test_normalize_page_url_canonicalizes_fragment_and_slash() -> None:
     assert normalize_page_url("HTTPS://Example.com:443/apto/?a=1&b=2#top") == "https://example.com/apto?a=1&b=2"
+
+
+# --- Tests below this line were removed along with the asset enrichment pipeline ---
+# (raw_listing_assets, downloaded_assets, raw_listing_artifacts tables dropped in migration 0015)
+
+def _REMOVED_test_download_asset_with_retries_uses_exponential_backoff(monkeypatch) -> None:
+    runner = build_runner()
+    runner.asset_download_retries = 2
+    runner.asset_download_backoff_seconds = 0.5
+
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        headers = {"Content-Type": "image/jpeg"}
+        content = b"image-bytes"
+
+        def raise_for_status(self) -> None:
+            return
+
+    class FakeClient:
+        def __enter__(self):  # noqa: ANN204
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+            return None
+
+        def get(self, asset_url: str) -> FakeResponse:
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise RuntimeError("temporary")
+            return FakeResponse()
+
+    runner.object_store = SimpleNamespace(
+        infer_extension=lambda source_url, content_type: ".jpg",
+        put_bytes=lambda payload, key, content_type: SimpleNamespace(
+            uri=f"s3://bucket/{key}",
+            content_type=content_type,
+            checksum_sha256="checksum",
+            size=len(payload),
+        ),
+    )
+
+    monkeypatch.setattr(runner, "_http_client", lambda: FakeClient())
+    monkeypatch.setattr("oikos_scraper.runner.time.sleep", lambda delay: sleeps.append(delay))
+
+    resolved = runner._download_asset_with_retries(
+        "https://cdn.example.com/a.jpg",
+        normalize_asset_download_url("https://cdn.example.com/a.jpg"),
+    )
+
+    assert attempts["count"] == 3
+    assert sleeps == [0.5, 1.0]
+    assert resolved.asset_uri.endswith(".jpg")
+    assert resolved.checksum_sha256 == "checksum"
+
+
+def _REMOVED_test_enrich_assets_source_reuses_downloaded_asset(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    runner.object_store = SimpleNamespace(
+        infer_extension=lambda asset_url, content_type: ".jpg",
+        uri_for_key=lambda key: f"s3://bucket/{key}",
+    )
+
+    ingestion = SimpleNamespace(
+        source_code="test",
+        external_id="ext-1",
+        offering_hash="offering-1",
+        asset_links=["https://cdn.example.com/a.jpg"],
+    )
+    upsert_calls: list[dict] = []
+
+    monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr("oikos_scraper.runner.list_ingestions", lambda *args, **kwargs: [ingestion])
+    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_asset", lambda *args, **kwargs: upsert_calls.append(kwargs) or object())
+    monkeypatch.setattr(
+        runner,
+        "_lookup_downloaded_asset",
+        lambda asset_url: ResolvedAsset(
+            asset_url=asset_url,
+            asset_url_normalized=normalize_asset_download_url(asset_url),
+            asset_uri="s3://bucket/bronze/ingestion/shared/assets/a.jpg",
+            content_type="image/jpeg",
+            checksum_sha256="checksum",
+            size_bytes=123,
+            is_scrapped=True,
+        ),
+    )
+    monkeypatch.setattr(runner, "_download_missing_assets", lambda missing_assets: ({}, {}))
+
+    summary = runner.enrich_assets_source(source, object())
+
+    assert summary.assets_seen == 1
+    assert summary.assets_scrapped == 0
+    assert summary.assets_reused == 1
+    assert upsert_calls[0]["asset_uri"] == "s3://bucket/bronze/ingestion/shared/assets/a.jpg"
+    assert upsert_calls[0]["is_scrapped"] is True
+
+
+def _REMOVED_test_enrich_assets_source_downloads_unique_missing_asset_once(monkeypatch) -> None:
+    runner = build_runner()
+    source = runner.config.find_source("test")
+    runner.object_store = SimpleNamespace(
+        infer_extension=lambda asset_url, content_type: ".jpg",
+        uri_for_key=lambda key: f"s3://bucket/{key}",
+    )
+
+    asset_url = "https://cdn.example.com/a.jpg"
+    normalized_url = normalize_asset_download_url(asset_url)
+    ingestions = [
+        SimpleNamespace(source_code="test", external_id="ext-1", offering_hash="offering-1", asset_links=[asset_url]),
+        SimpleNamespace(source_code="test", external_id="ext-2", offering_hash="offering-2", asset_links=[asset_url]),
+    ]
+    registry: dict[str, ResolvedAsset] = {}
+    download_calls: list[dict[str, str]] = []
+
+    monkeypatch.setattr("oikos_scraper.runner.create_scrape_run", lambda *args, **kwargs: object())
+    monkeypatch.setattr("oikos_scraper.runner.complete_scrape_run", lambda *args, **kwargs: None)
+    monkeypatch.setattr("oikos_scraper.runner.list_ingestions", lambda *args, **kwargs: ingestions)
+    monkeypatch.setattr("oikos_scraper.runner.upsert_listing_asset", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        "oikos_scraper.runner.upsert_downloaded_asset_success",
+        lambda *args, **kwargs: registry.setdefault(
+            kwargs["asset_url_normalized"],
+            ResolvedAsset(
+                asset_url=kwargs["asset_url"],
+                asset_url_normalized=kwargs["asset_url_normalized"],
+                asset_uri=kwargs["asset_uri"],
+                content_type=kwargs["content_type"],
+                checksum_sha256=kwargs["checksum_sha256"],
+                size_bytes=kwargs["size_bytes"],
+                is_scrapped=True,
+            ),
+        ),
+    )
+    monkeypatch.setattr("oikos_scraper.runner.record_downloaded_asset_failure", lambda *args, **kwargs: object())
+    monkeypatch.setattr(runner, "_cache_asset", lambda **kwargs: None)
+    monkeypatch.setattr(runner, "_lookup_downloaded_asset", lambda raw_asset_url: registry.get(normalize_asset_download_url(raw_asset_url)))
+
+    def fake_download_missing_assets(missing_assets: dict[str, str]) -> tuple[dict[str, ResolvedAsset], dict[str, str]]:
+        download_calls.append(dict(missing_assets))
+        if not missing_assets:
+            return ({}, {})
+        return (
+            {
+                normalized_url: ResolvedAsset(
+                    asset_url=asset_url,
+                    asset_url_normalized=normalized_url,
+                    asset_uri="s3://bucket/bronze/ingestion/shared/assets/a.jpg",
+                    content_type="image/jpeg",
+                    checksum_sha256="checksum",
+                    size_bytes=123,
+                    is_scrapped=True,
+                )
+            },
+            {},
+        )
+
+    monkeypatch.setattr(runner, "_download_missing_assets", fake_download_missing_assets)
+
+    summary = runner.enrich_assets_source(source, object())
+
+    assert summary.assets_seen == 2
+    assert summary.assets_scrapped == 1
+    assert summary.assets_reused == 1
+    assert download_calls == [{normalized_url: asset_url}, {}]

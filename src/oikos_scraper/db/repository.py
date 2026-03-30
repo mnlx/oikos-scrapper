@@ -12,8 +12,6 @@ from oikos_scraper.config import SourceDefinition
 from oikos_scraper.db.models import (
     BronzeListing,
     Listing,
-    ListingAsset,
-    ListingArtifact,
     ListingIngestion,
     LlmEnrichment,
     NeighborhoodArtifact,
@@ -24,7 +22,7 @@ from oikos_scraper.db.models import (
 )
 from oikos_scraper.object_store import offering_hash
 from oikos_scraper.raw_html_store import build_raw_html_store
-from oikos_scraper.types import ListingArtifactBundle, ListingDraft, ParsedListingRecord, StoredObject
+from oikos_scraper.types import ListingDraft, ParsedListingRecord
 
 
 RAW_HTML_STORE = None
@@ -273,48 +271,6 @@ def upsert_listing_ingestion(
     return ingestion
 
 
-def _artifact_rows(bundle: ListingArtifactBundle) -> list[tuple[str, StoredObject | None, str | None]]:
-    rows: list[tuple[str, StoredObject | None, str | None]] = [
-        ("html", bundle.html, None),
-        ("screenshot", bundle.screenshot, None),
-        ("json", bundle.metadata, None),
-    ]
-    return [row for row in rows if row[1] is not None]
-
-
-def replace_listing_artifacts(
-    session: Session,
-    *,
-    ingestion: ListingIngestion,
-    bundle: ListingArtifactBundle,
-    image_source_urls: list[str] | None = None,
-) -> None:
-    session.query(ListingArtifact).filter(ListingArtifact.ingestion_id == ingestion.id).delete()
-    created_at = datetime.now(UTC)
-    image_urls = image_source_urls or []
-    image_index = 0
-    for artifact_type, stored, source_url in _artifact_rows(bundle):
-        if stored is None:
-            continue
-        if artifact_type == "image":
-            source_url = image_urls[image_index] if image_index < len(image_urls) else None
-            image_index += 1
-        session.add(
-            ListingArtifact(
-                ingestion_id=ingestion.id,
-                artifact_type=artifact_type,
-                bucket=stored.bucket,
-                object_key=stored.key,
-                object_uri=stored.uri,
-                content_type=stored.content_type,
-                checksum_sha256=stored.checksum_sha256,
-                size_bytes=stored.size,
-                source_url=source_url,
-                created_at=created_at,
-            )
-        )
-    session.commit()
-
 
 def list_listings_for_price_enrichment(
     session: Session,
@@ -420,7 +376,7 @@ def list_listings_for_llm_enrichment(
     source_codes: list[str] | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Query mart_listings for rows not yet LLM-enriched. Returns list of dicts."""
+    """Query int_listings_deduped for rows not yet LLM-enriched. Returns list of dicts."""
     where_clauses = ["m.offering_hash NOT IN (SELECT offering_hash FROM mart_listing_llm_enriched)"]
     params: dict = {"limit": limit}
     if source_codes:
@@ -435,10 +391,10 @@ def list_listings_for_llm_enrichment(
             m.latitude, m.longitude,
             m.price_sale, m.price_rent, m.condo_fee, m.iptu,
             m.bedrooms, m.bathrooms, m.parking_spaces, m.area_m2,
-            m.description
-        FROM mart_listings m
+            m.description, m.text_html
+        FROM int_listings_deduped m
         WHERE {where_sql}
-        ORDER BY m.last_seen_at DESC
+        ORDER BY m.parsed_at DESC
         LIMIT :limit
     """)
     result = session.execute(sql, params)
@@ -540,66 +496,6 @@ def list_ingestions(session: Session, source_codes: list[str] | None = None) -> 
     statement = statement.where(ListingIngestion.depth == 0)
     return session.execute(statement.order_by(ListingIngestion.last_seen_at.desc())).scalars().all()
 
-
-def list_artifacts_for_ingestion(session: Session, ingestion_id: int) -> list[ListingArtifact]:
-    return session.execute(
-        select(ListingArtifact).where(ListingArtifact.ingestion_id == ingestion_id).order_by(ListingArtifact.id.asc())
-    ).scalars().all()
-
-
-def upsert_listing_asset(
-    session: Session,
-    *,
-    source: Source,
-    ingestion: ListingIngestion,
-    asset_id: int,
-    asset_type: str,
-    asset_url: str,
-    asset_uri: str,
-    is_scrapped: bool,
-    content_type: str | None,
-    checksum_sha256: str | None,
-    size_bytes: int | None,
-) -> ListingAsset:
-    now = datetime.now(UTC)
-    row_id = f"{ingestion.source_code}:{ingestion.external_id}:{asset_id}"
-    statement = insert(ListingAsset).values(
-        id=row_id,
-        source_id=source.id,
-        ingestion_id=ingestion.id,
-        source_code=ingestion.source_code,
-        external_id=ingestion.external_id,
-        asset_id=asset_id,
-        asset_type=asset_type,
-        asset_url=asset_url,
-        asset_uri=asset_uri,
-        content_type=content_type,
-        checksum_sha256=checksum_sha256,
-        size_bytes=size_bytes,
-        is_scrapped=is_scrapped,
-        discovered_at=now,
-        scrapped_at=now if is_scrapped else None,
-    ).on_conflict_do_update(
-        constraint="uq_raw_listing_assets_source_external_url",
-        set_={
-            "id": row_id,
-            "source_id": source.id,
-            "ingestion_id": ingestion.id,
-            "source_code": ingestion.source_code,
-            "external_id": ingestion.external_id,
-            "asset_id": asset_id,
-            "asset_type": asset_type,
-            "asset_uri": asset_uri,
-            "content_type": content_type,
-            "checksum_sha256": checksum_sha256,
-            "size_bytes": size_bytes,
-            "is_scrapped": is_scrapped,
-            "scrapped_at": now if is_scrapped else ListingAsset.scrapped_at,
-        },
-    ).returning(ListingAsset)
-    row = session.execute(statement).scalar_one()
-    session.commit()
-    return row
 
 
 def upsert_neighborhood_file(
@@ -852,10 +748,10 @@ def upsert_bronze_listing(
         screenshot_uri=record.screenshot_uri,
         html_uri=record.html_uri,
         metadata_uri=record.metadata_uri,
-        raw_payload=sanitize_json_value(record.raw_payload),
+        text_html=record.text_html,
         parsed_at=parsed_at,
     ).on_conflict_do_update(
-        constraint="uq_raw_listings_source_external_id",
+        constraint="uq_int_listings_deduped_source_external_id",
         set_={
             "ingestion_id": ingestion.id,
             "offering_hash": record.offering_hash,
@@ -887,7 +783,7 @@ def upsert_bronze_listing(
             "screenshot_uri": record.screenshot_uri,
             "html_uri": record.html_uri,
             "metadata_uri": record.metadata_uri,
-            "raw_payload": sanitize_json_value(record.raw_payload),
+            "text_html": record.text_html,
             "parsed_at": parsed_at,
         },
     ).returning(BronzeListing)

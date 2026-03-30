@@ -55,19 +55,16 @@ select
   b.published_at,
   b.listing_created_at,
   b.listing_updated_at,
-  coalesce(m.image_uris, b.image_uris, '[]'::jsonb) as image_uris,
+  coalesce(b.image_uris, '[]'::jsonb) as image_uris,
   b.asset_links,
   b.screenshot_uri,
   b.html_uri,
   b.metadata_uri,
-  coalesce(m.scrapped_asset_count, 0) as scrapped_asset_count,
+  b.text_html,
   coalesce(cs.max_depth_crawled, roots.root_depth, 0) as max_depth_crawled,
   coalesce(cs.crawled_pages, 1) as crawled_pages,
-  b.raw_payload,
   b.parsed_at
-from {{ source('app', 'raw_listings') }} as b
-left join {{ ref('int_listing_media') }} as m
-  on b.ingestion_id = m.ingestion_id
+from {{ source('app', 'int_listings_deduped') }} as b
 left join source_lookup as sl
   on b.source_id = sl.source_id
 left join roots

@@ -108,12 +108,25 @@ class BronzeObjectStore:
     def uri_for_key(self, key: str) -> str:
         return f"s3://{self.bucket}/{key}"
 
+    def key_for_uri(self, uri: str) -> str | None:
+        parsed = urlparse(uri)
+        if parsed.scheme != "s3" or parsed.netloc != self.bucket:
+            return None
+        key = parsed.path.lstrip("/")
+        return key or None
+
     def object_exists(self, key: str) -> bool:
         try:
             self.client.stat_object(self.bucket, key)
             return True
         except Exception:
             return False
+
+    def object_exists_uri(self, uri: str) -> bool:
+        key = self.key_for_uri(uri)
+        if key is None:
+            return False
+        return self.object_exists(key)
 
     def get_text(self, key: str) -> str:
         response = self.client.get_object(self.bucket, key)
