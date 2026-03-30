@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from dataclasses import asdict
 
 from alembic import command
@@ -176,6 +177,8 @@ def main() -> None:
                 indent=2,
             )
         )
+        if result.returncode != 0:
+            sys.exit(result.returncode)
         return
 
     if args.command == "scrape-source":

@@ -658,7 +658,7 @@ class ScrapeRunner:
         ]
         if select:
             command.extend(["--select", select])
-        return subprocess.run(command, check=True, text=True, capture_output=True, env=env)
+        return subprocess.run(command, check=False, text=True, capture_output=True, env=env)
 
     def _fetch_page_html_with_source(self, client: httpx.Client, url: str) -> tuple[str, str]:
         """Fetch page HTML with httpx → playwright → selenium fallback. Returns (html, source_name)."""
