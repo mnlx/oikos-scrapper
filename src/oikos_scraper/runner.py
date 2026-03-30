@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from collections import deque
@@ -177,7 +178,15 @@ class ScrapeRunner:
         )
 
     def _project_root(self) -> Path:
-        return Path(__file__).resolve().parents[2]
+        env_root = os.environ.get("OIKOS_PROJECT_ROOT")
+        if env_root:
+            return Path(env_root)
+        # When running from source, walk up from runner.py → oikos_scraper → src → project root
+        candidate = Path(__file__).resolve().parents[2]
+        if (candidate / "dbt_project.yml").exists():
+            return candidate
+        # Installed as a package: fall back to /app (Docker WORKDIR)
+        return Path("/app")
 
     def _strategy_sequence(self, preferred_strategy: str) -> list[str]:
         httpx_primary = preferred_strategy if preferred_strategy in {"embedded_data", "static_html"} else "embedded_data"
