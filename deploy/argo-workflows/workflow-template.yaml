@@ -18,6 +18,9 @@ spec:
   templates:
     - name: run-all
       steps:
+        # Run DB migrations first
+        - - name: migrate
+            template: run-migrate
         # Ingest all groups in parallel
         - - name: ingest-agencies
             template: run-ingest
@@ -40,6 +43,24 @@ spec:
             template: run-llm-enrich
         - - name: publish-api
             template: run-publish
+    - name: run-migrate
+      container:
+        image: ghcr.io/mnlx/oikos-scrapper:deploy-oikos-medallion
+        imagePullPolicy: Always
+        command:
+          - oikos
+        args:
+          - migrate
+        envFrom:
+          - secretRef:
+              name: oikos-scrapper-env
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: "1"
+            memory: 256Mi
     - name: run-ingest
       inputs:
         parameters:
